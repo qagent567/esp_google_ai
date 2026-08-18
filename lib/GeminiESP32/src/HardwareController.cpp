@@ -11,22 +11,38 @@ uint8_t temprature_sens_read();
 }
 #endif
 
-// Список запрещенных пинов (Flash SPI и UART0)
+// Список системных запрещенных пинов (Flash SPI и UART0)
 static const uint8_t FORBIDDEN_GPIOS[] = {
     1, 3,       // UART0 TX, RX
     6, 7, 8, 9, 10, 11 // Встроенная Flash SPI
 };
 
-HardwareController::HardwareController() {}
+HardwareController::HardwareController() : _enabled(true) {}
 HardwareController::~HardwareController() {}
 
 bool HardwareController::begin() {
-    pinMode(2, OUTPUT);
-    digitalWrite(2, LOW);
+    // Безопасная инициализация: не трогаем пины без явного запроса пользователя
     return true;
 }
 
-bool HardwareController::isValidGpio(uint8_t pin) const {
+void HardwareController::setAllowedPins(const std::vector<uint8_t>& allowedPins) {
+    _allowedPins = allowedPins;
+}
+
+void HardwareController::allowAllSafePins() {
+    _allowedPins.clear();
+}
+
+bool HardwareController::isPinAllowed(uint8_t pin) const {
+    if (!isValidGpio(pin)) return false;
+    if (_allowedPins.empty()) return true; // Если белый список не задан, разрешены все безопасные пины
+    for (uint8_t p : _allowedPins) {
+        if (p == pin) return true;
+    }
+    return false;
+}
+
+bool HardwareController::isValidGpio(uint8_t pin) {
     if (pin > 39) return false;
     for (size_t i = 0; i < sizeof(FORBIDDEN_GPIOS) / sizeof(FORBIDDEN_GPIOS[0]); i++) {
         if (pin == FORBIDDEN_GPIOS[i]) return false;
@@ -34,36 +50,41 @@ bool HardwareController::isValidGpio(uint8_t pin) const {
     return true;
 }
 
-void HardwareController::setPinMode(uint8_t pin, uint8_t mode) {
-    if (!isValidGpio(pin)) return;
-    if (pin >= 34 && pin <= 39 && mode == OUTPUT) return;
+bool HardwareController::setPinMode(uint8_t pin, uint8_t mode) {
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39 && mode == OUTPUT) return false;
     pinMode(pin, mode);
+    return true;
 }
 
-void HardwareController::writePin(uint8_t pin, uint8_t value) {
-    if (!isValidGpio(pin)) return;
-    if (pin >= 34 && pin <= 39) return;
+bool HardwareController::writePin(uint8_t pin, uint8_t value) {
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39) return false;
     pinMode(pin, OUTPUT);
     digitalWrite(pin, value ? HIGH : LOW);
+    return true;
 }
 
 int HardwareController::readPin(uint8_t pin) {
-    if (!isValidGpio(pin)) return -1;
+    if (!_enabled || !isPinAllowed(pin)) return -1;
     return digitalRead(pin);
 }
 
-void HardwareController::togglePin(uint8_t pin) {
-    if (!isValidGpio(pin)) return;
-    if (pin >= 34 && pin <= 39) return;
+bool HardwareController::togglePin(uint8_t pin) {
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39) return false;
     pinMode(pin, OUTPUT);
     int current = digitalRead(pin);
     digitalWrite(pin, !current);
+    return true;
 }
 
 int HardwareController::readAnalogPin(uint8_t pin) {
+    if (!_enabled) return -1;
     if (pin != 32 && pin != 33 && pin != 34 && pin != 35 && pin != 36 && pin != 39) {
         return -1;
     }
+    if (!isPinAllowed(pin)) return -1;
     return analogRead(pin);
 }
 
@@ -95,6 +116,7 @@ String HardwareController::getTelemetrySummary() {
 }
 
 String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
+    if (!_enabled) return "Аппаратный контроллер I2C отключен.";
     Wire.begin(sda, scl);
     char buf[128];
     snprintf(buf, sizeof(buf), "Сканирование шины I2C (SDA=%u, SCL=%u):\n", sda, scl);
@@ -142,6 +164,10 @@ String HardwareController::getHardwareCapabilitiesDescription() {
 }
 
 String HardwareController::executeActionJson(const String& jsonAction) {
+    if (!_enabled) {
+        return "Аппаратное управление GPIO/I2C отключено пользователем в настройках.";
+    }
+
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, jsonAction);
     char buf[128];
@@ -154,8 +180,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     if (strcmp(action, "set_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
         uint8_t val = doc["value"] | 0;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для управления", pin);
             return String(buf);
         }
         writePin(pin, val);
@@ -164,8 +190,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "read_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для чтения", pin);
             return String(buf);
         }
         setPinMode(pin, INPUT);
@@ -175,6 +201,10 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "read_analog") == 0) {
         uint8_t pin = doc["pin"] | 255;
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: аналоговый пин GPIO %u не разрешен", pin);
+            return String(buf);
+        }
         int val = readAnalogPin(pin);
         if (val < 0) {
             snprintf(buf, sizeof(buf), "Ошибка чтения аналогового входа на GPIO %u", pin);
@@ -186,8 +216,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "toggle_pin") == 0) {
         uint8_t pin = doc["pin"] | 2;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен", pin);
             return String(buf);
         }
         togglePin(pin);

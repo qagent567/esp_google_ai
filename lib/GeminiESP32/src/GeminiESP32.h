@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <lwip/dns.h>
 #include <lwip/ip_addr.h>
+#include <vector>
 
 // Подключение внутренних модулей библиотеки
 #include "ConfigManager.h"
@@ -16,6 +17,7 @@
 /**
  * @brief Главный высокоуровневый класс библиотеки GeminiESP32
  * Позволяет в 3-5 строк кода подключить Gemini AI к любому проекту ESP32.
+ * Полностью настраиваемый, исключающий любые конфликты с периферией других прошивок.
  */
 class GeminiESP32 {
 public:
@@ -28,9 +30,11 @@ public:
     ~GeminiESP32();
 
     /**
-     * @brief Инициализация и настройка Smart DNS
+     * @brief Инициализация библиотеки
+     * @param apiKey Необязательный API-ключ (если не передан в конструктор)
+     * @param autoSmartDns Автоматически применить Smart DNS для обхода ограничений (по умолчанию true)
      */
-    void begin(const String& apiKey = "");
+    void begin(const String& apiKey = "", bool autoSmartDns = true);
 
     /**
      * @brief Установка API ключа
@@ -58,14 +62,32 @@ public:
     void setMaxTokens(int maxTokens);
 
     /**
-     * @brief Настройка Smart DNS для обхода региональных ограничений
+     * @brief Включение/выключение Smart DNS
+     */
+    void enableSmartDns(bool enable = true);
+
+    /**
+     * @brief Ручная настройка Smart DNS серверов
      */
     void setSmartDns(const char* primary = "111.88.96.50", const char* secondary = "111.88.96.51");
 
     /**
      * @brief Включение/выключение аппаратного управления платой (GPIO/ADC/I2C)
+     * Если выключено — библиотека никогда не трогает пины и шины платы.
      */
     void enableHardwareControl(bool enable = true);
+
+    /**
+     * @brief Настройка белого списка пинов, которыми разрешено управлять ИИ
+     * Защищает остальные пины вашей прошивки (SD-карты, экраны, датчики) от вмешательства.
+     * @param allowedPins Список номеров GPIO (например, {2, 4, 5})
+     */
+    void setAllowedPins(const std::vector<uint8_t>& allowedPins);
+
+    /**
+     * @brief Разрешить управление всеми безопасными пинами (сброс белого списка)
+     */
+    void allowAllSafePins();
 
     /**
      * @brief Простой синхронный запрос к Gemini (возвращает только текст ответа)
@@ -85,7 +107,7 @@ public:
     bool ping();
 
     /**
-     * @brief Получить доступ к аппаратному контроллеру
+     * @brief Получить прямой доступ к аппаратному контроллеру
      */
     HardwareController& getHardware() { return _hardware; }
 
@@ -110,5 +132,5 @@ private:
     UsageTracker _usage;
     GeminiClient* _client;
     bool _hardwareEnabled;
-    bool _smartDnsConfigured;
+    bool _smartDnsEnabled;
 };

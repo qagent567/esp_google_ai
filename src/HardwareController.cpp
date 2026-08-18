@@ -6,87 +6,101 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-uint8_t temprature_sens_read(); // Декларация встроенного датчика температуры ESP32
+uint8_t temprature_sens_read();
 #ifdef __cplusplus
 }
 #endif
 
-HardwareController::HardwareController() {}
+// Список системных запрещенных пинов (Flash SPI и UART0)
+static const uint8_t FORBIDDEN_GPIOS[] = {
+    1, 3,       // UART0 TX, RX
+    6, 7, 8, 9, 10, 11 // Встроенная Flash SPI
+};
 
-void HardwareController::begin() {
-    // Встроенный LED на ESP32 (обычно GPIO 2) настраиваем на выход в состоянии LOW
-    pinMode(2, OUTPUT);
-    digitalWrite(2, LOW);
+HardwareController::HardwareController() : _enabled(true) {}
+HardwareController::~HardwareController() {}
+
+bool HardwareController::begin() {
+    // Безопасная инициализация: не трогаем пины без явного запроса пользователя
+    return true;
+}
+
+void HardwareController::setAllowedPins(const std::vector<uint8_t>& allowedPins) {
+    _allowedPins = allowedPins;
+}
+
+void HardwareController::allowAllSafePins() {
+    _allowedPins.clear();
+}
+
+bool HardwareController::isPinAllowed(uint8_t pin) const {
+    if (!isValidGpio(pin)) return false;
+    if (_allowedPins.empty()) return true; // Если белый список не задан, разрешены все безопасные пины
+    for (uint8_t p : _allowedPins) {
+        if (p == pin) return true;
+    }
+    return false;
 }
 
 bool HardwareController::isValidGpio(uint8_t pin) {
-    // На ESP32 безопасные для управления пользователем GPIO: 2, 4, 5, 12, 13, 14, 15, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33
-    // Пины только на вход (input-only): 34, 35, 36, 39
-    // Пины Flash (6-11) и UART0 (1, 3) трогать нельзя во избежание сбоя прошивки
-    if (pin == 1 || pin == 3) return false; // UART0
-    if (pin >= 6 && pin <= 11) return false; // SPI Flash
     if (pin > 39) return false;
+    for (size_t i = 0; i < sizeof(FORBIDDEN_GPIOS) / sizeof(FORBIDDEN_GPIOS[0]); i++) {
+        if (pin == FORBIDDEN_GPIOS[i]) return false;
+    }
     return true;
 }
 
 bool HardwareController::setPinMode(uint8_t pin, uint8_t mode) {
-    if (!isValidGpio(pin)) return false;
-    if ((pin >= 34 && pin <= 39) && mode == OUTPUT) {
-        // Пины 34-39 на ESP32 физически работают только на вход (Input Only)
-        return false;
-    }
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39 && mode == OUTPUT) return false;
     pinMode(pin, mode);
     return true;
 }
 
-bool HardwareController::writePin(uint8_t pin, uint8_t val) {
-    if (!isValidGpio(pin)) return false;
-    if (pin >= 34 && pin <= 39) return false; // Input Only
+bool HardwareController::writePin(uint8_t pin, uint8_t value) {
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39) return false;
     pinMode(pin, OUTPUT);
-    digitalWrite(pin, (val > 0) ? HIGH : LOW);
+    digitalWrite(pin, value ? HIGH : LOW);
     return true;
 }
 
 int HardwareController::readPin(uint8_t pin) {
-    if (!isValidGpio(pin)) return -1;
+    if (!_enabled || !isPinAllowed(pin)) return -1;
     return digitalRead(pin);
 }
 
-int HardwareController::readAnalogPin(uint8_t pin) {
-    // Аналоговые входы ADC1 (работают при включенном Wi-Fi): GPIO 32, 33, 34, 35, 36, 39
-    // ADC2 пины (0, 2, 4, 12-15, 25-27) могут конфликтовать с Wi-Fi driver
-    if (pin == 32 || pin == 33 || pin == 34 || pin == 35 || pin == 36 || pin == 39 ||
-        pin == 2 || pin == 4 || pin == 12 || pin == 13 || pin == 14 || pin == 15 || pin == 25 || pin == 26 || pin == 27) {
-        return analogRead(pin);
-    }
-    return -1;
-}
-
 bool HardwareController::togglePin(uint8_t pin) {
-    if (!isValidGpio(pin) || (pin >= 34 && pin <= 39)) return false;
+    if (!_enabled || !isPinAllowed(pin)) return false;
+    if (pin >= 34 && pin <= 39) return false;
     pinMode(pin, OUTPUT);
     int current = digitalRead(pin);
-    digitalWrite(pin, current == HIGH ? LOW : HIGH);
+    digitalWrite(pin, !current);
     return true;
 }
 
-float HardwareController::getChipTemperature() {
-    // В ESP32 Arduino Core доступен вызов temperatureRead()
-    #if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 4)
-        return temperatureRead();
-    #else
-        // Конвертация сырого значения сенсора в градусы Цельсия
-        return (temprature_sens_read() - 32) / 1.8f;
-    #endif
+int HardwareController::readAnalogPin(uint8_t pin) {
+    if (!_enabled) return -1;
+    if (pin != 32 && pin != 33 && pin != 34 && pin != 35 && pin != 36 && pin != 39) {
+        return -1;
+    }
+    if (!isPinAllowed(pin)) return -1;
+    return analogRead(pin);
 }
 
 DeviceTelemetry HardwareController::getTelemetry() {
     DeviceTelemetry t;
-    t.chipTempC = getChipTemperature();
+    #if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 4)
+        t.chipTempC = temperatureRead();
+    #else
+        t.chipTempC = (temprature_sens_read() - 32) / 1.8f;
+    #endif
+
     t.freeHeapBytes = ESP.getFreeHeap();
     t.minFreeHeapBytes = ESP.getMinFreeHeap();
-    t.uptimeSec = millis() / 1000;
-    t.wifiRssi = (WiFi.status() == WL_CONNECTED) ? WiFi.RSSI() : 0;
+    t.heapSizeBytes = ESP.getHeapSize();
+    t.uptimeSec = millis() / 1000UL;
+    t.wifiRssi = WiFi.isConnected() ? WiFi.RSSI() : 0;
     t.cpuFreqMHz = ESP.getCpuFreqMHz();
     t.flashSizeBytes = ESP.getFlashChipSize();
     return t;
@@ -102,6 +116,7 @@ String HardwareController::getTelemetrySummary() {
 }
 
 String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
+    if (!_enabled) return "Аппаратный контроллер I2C отключен.";
     Wire.begin(sda, scl);
     char buf[128];
     snprintf(buf, sizeof(buf), "Сканирование шины I2C (SDA=%u, SCL=%u):\n", sda, scl);
@@ -149,6 +164,10 @@ String HardwareController::getHardwareCapabilitiesDescription() {
 }
 
 String HardwareController::executeActionJson(const String& jsonAction) {
+    if (!_enabled) {
+        return "Аппаратное управление GPIO/I2C отключено пользователем в настройках.";
+    }
+
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, jsonAction);
     char buf[128];
@@ -161,8 +180,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     if (strcmp(action, "set_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
         uint8_t val = doc["value"] | 0;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для управления", pin);
             return String(buf);
         }
         writePin(pin, val);
@@ -171,8 +190,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "read_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для чтения", pin);
             return String(buf);
         }
         setPinMode(pin, INPUT);
@@ -182,6 +201,10 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "read_analog") == 0) {
         uint8_t pin = doc["pin"] | 255;
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: аналоговый пин GPIO %u не разрешен", pin);
+            return String(buf);
+        }
         int val = readAnalogPin(pin);
         if (val < 0) {
             snprintf(buf, sizeof(buf), "Ошибка чтения аналогового входа на GPIO %u", pin);
@@ -193,8 +216,8 @@ String HardwareController::executeActionJson(const String& jsonAction) {
     }
     else if (strcmp(action, "toggle_pin") == 0) {
         uint8_t pin = doc["pin"] | 2;
-        if (!isValidGpio(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+        if (!isPinAllowed(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен", pin);
             return String(buf);
         }
         togglePin(pin);

@@ -2,50 +2,69 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <vector>
 
 /**
- * @brief Структура телеметрии состояния аппаратной части ESP32
+ * @brief Структура аппаратной телеметрии микроконтроллера ESP32
  */
 struct DeviceTelemetry {
-    float chipTempC;          // Температура кристалла ESP32 в градусах Цельсия
-    uint32_t freeHeapBytes;   // Свободная оперативная память (RAM)
-    uint32_t minFreeHeapBytes;// Минимальный зафиксированный уровень свободной RAM
-    uint32_t uptimeSec;       // Время непрерывной работы с момента включения (секунды)
-    int wifiRssi;             // Уровень сигнала Wi-Fi (dBm)
-    uint32_t cpuFreqMHz;      // Частота процессора Xtensa (МГц)
-    uint32_t flashSizeBytes;  // Общий размер Flash-памяти
+    float chipTempC;             // Температура кремниевого кристалла ESP32 в °C
+    uint32_t freeHeapBytes;      // Текущая свободная память RAM
+    uint32_t minFreeHeapBytes;   // Минимальный исторический остаток свободной RAM
+    uint32_t heapSizeBytes;      // Полный размер кучи (heap)
+    uint32_t uptimeSec;          // Время непрерывной работы с момента запуска
+    int wifiRssi;                // Уровень сигнала Wi-Fi (dBm)
+    uint32_t cpuFreqMHz;         // Тактовая частота CPU (обычно 240 МГц)
+    uint32_t flashSizeBytes;     // Объем Flash памяти (байты)
 };
 
 /**
- * @brief Класс для управления аппаратными ресурсами ESP32 и выполнения команд от нейросети
+ * @brief Класс безопасного аппаратного контроллера микроконтроллера ESP32
+ * Предоставляет функции прямого управления GPIO, чтение ADC1, температуру и интерфейс I2C.
+ * Поддерживает белые списки пинов и полное отключение управления для бесконфликтной интеграции.
  */
 class HardwareController {
 public:
     HardwareController();
-    void begin();
+    ~HardwareController();
 
-    // --- Управление GPIO ---
+    bool begin();
+
+    // Включение / выключение аппаратного управления
+    void setEnabled(bool enable) { _enabled = enable; }
+    bool isEnabled() const { return _enabled; }
+
+    // Настройка белого списка разрешенных пинов (если список пуст — разрешены все безопасные GPIO)
+    void setAllowedPins(const std::vector<uint8_t>& allowedPins);
+    void allowAllSafePins();
+    bool isPinAllowed(uint8_t pin) const;
+
+    // Проверка физической допустимости пина (защита Flash SPI и UART0)
+    static bool isValidGpio(uint8_t pin);
+
+    // Безопасное управление цифровыми пинами (возвращают true при успехе)
     bool setPinMode(uint8_t pin, uint8_t mode);
-    bool writePin(uint8_t pin, uint8_t val);
+    bool writePin(uint8_t pin, uint8_t value);
     int readPin(uint8_t pin);
-    int readAnalogPin(uint8_t pin);
     bool togglePin(uint8_t pin);
 
-    // --- Телеметрия и датчики ---
+    // Аналоговые входы (ADC1: пины 32, 33, 34, 35, 36, 39)
+    int readAnalogPin(uint8_t pin);
+
+    // Телеметрия системы и чипа
     DeviceTelemetry getTelemetry();
     String getTelemetrySummary();
-    float getChipTemperature();
 
-    // --- I2C сканирование ---
+    // Сканирование шины I2C
     String scanI2C(uint8_t sda = 21, uint8_t scl = 22);
 
-    // --- Выполнение структурированных команд от Gemini AI ---
-    // Обрабатывает вызов действия в формате JSON и возвращает текстовый результат выполнения
+    // Исполнитель структурированных JSON действий от AI
     String executeActionJson(const String& jsonAction);
 
-    // Генерация описания возможностей железа для системного промпта Gemini
+    // Формирование текста аппаратных возможностей для системного промпта
     static String getHardwareCapabilitiesDescription();
 
-    // Вспомогательная проверка валидности номера GPIO пина на ESP32
-    static bool isValidGpio(uint8_t pin);
+private:
+    bool _enabled;
+    std::vector<uint8_t> _allowedPins;
 };

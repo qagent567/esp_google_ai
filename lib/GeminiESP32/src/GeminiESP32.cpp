@@ -1,7 +1,7 @@
 #include "GeminiESP32.h"
 
 GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
-    : _hardwareEnabled(true), _smartDnsConfigured(false) {
+    : _hardwareEnabled(true), _smartDnsEnabled(true) {
     _client = new GeminiClient(_config, &_usage, &_hardware);
     
     if (apiKey.length() > 0) {
@@ -19,7 +19,7 @@ GeminiESP32::~GeminiESP32() {
     }
 }
 
-void GeminiESP32::begin(const String& apiKey) {
+void GeminiESP32::begin(const String& apiKey, bool autoSmartDns) {
     _config.begin();
     if (apiKey.length() > 0) {
         _config.setApiKey(apiKey);
@@ -27,8 +27,10 @@ void GeminiESP32::begin(const String& apiKey) {
     _usage.begin();
     _hardware.begin();
     
-    // Настройка Smart DNS
-    setSmartDns();
+    _smartDnsEnabled = autoSmartDns;
+    if (_smartDnsEnabled) {
+        setSmartDns();
+    }
 }
 
 void GeminiESP32::setApiKey(const String& apiKey) {
@@ -51,21 +53,36 @@ void GeminiESP32::setMaxTokens(int maxTokens) {
     _config.setMaxTokens(maxTokens);
 }
 
+void GeminiESP32::enableSmartDns(bool enable) {
+    _smartDnsEnabled = enable;
+    if (enable) {
+        setSmartDns();
+    }
+}
+
 void GeminiESP32::setSmartDns(const char* primary, const char* secondary) {
     ip_addr_t dns1, dns2;
     ipaddr_aton(primary, &dns1);
     ipaddr_aton(secondary, &dns2);
     dns_setserver(0, &dns1);
     dns_setserver(1, &dns2);
-    _smartDnsConfigured = true;
 }
 
 void GeminiESP32::enableHardwareControl(bool enable) {
     _hardwareEnabled = enable;
+    _hardware.setEnabled(enable);
     if (_client) {
         delete _client;
         _client = new GeminiClient(_config, &_usage, enable ? &_hardware : nullptr);
     }
+}
+
+void GeminiESP32::setAllowedPins(const std::vector<uint8_t>& allowedPins) {
+    _hardware.setAllowedPins(allowedPins);
+}
+
+void GeminiESP32::allowAllSafePins() {
+    _hardware.allowAllSafePins();
 }
 
 String GeminiESP32::ask(const String& prompt) {
