@@ -17,8 +17,8 @@
 // Глобальные объекты модулей системы
 ConfigManager configManager;
 NetworkManager networkManager(configManager);
-GeminiClient geminiClient(configManager);
 UsageTracker usageTracker;
+GeminiClient geminiClient(configManager, &usageTracker);
 SerialCLI serialCli(configManager, networkManager, geminiClient, usageTracker);
 
 void setup() {

@@ -1,10 +1,21 @@
-    #include "GeminiClient.h"
+#include "GeminiClient.h"
+#include "UsageTracker.h"
 
 // Хост Google AI Studio API
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-GeminiClient::GeminiClient(ConfigManager& configMgr)
-    : _configMgr(configMgr) {}
+GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker)
+    : _configMgr(configMgr), _usageTracker(usageTracker) {}
+
+uint32_t GeminiClient::getModelDailyLimit(const String& modelId) {
+    String m = modelId;
+    m.toLowerCase();
+    if (m.indexOf("deep-research") >= 0) return 50;
+    if (m.indexOf("computer-use") >= 0) return 50;
+    if (m.indexOf("pro") >= 0) return 200;
+    if (m.indexOf("robotics") >= 0) return 100;
+    return 1500; // Flash, Flash-Lite, Gemma, Nano, TTS, etc.
+}
 
 String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
@@ -224,6 +235,26 @@ static String formatTokensShort(uint32_t tokens) {
     return String(tokens);
 }
 
+static size_t utf8VisualLength(const String& str) {
+    size_t len = 0;
+    const char* s = str.c_str();
+    while (*s) {
+        if ((*s & 0xC0) != 0x80) len++;
+        s++;
+    }
+    return len;
+}
+
+static void printCell(const String& str, size_t width) {
+    size_t vLen = utf8VisualLength(str);
+    Serial.print(str);
+    if (vLen < width) {
+        for (size_t i = 0; i < width - vLen; i++) {
+            Serial.print(' ');
+        }
+    }
+}
+
 bool GeminiClient::listAvailableModels() {
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -291,17 +322,15 @@ bool GeminiClient::listAvailableModels() {
 
         _cachedModels.clear();
 
-        Serial.println(F("\n========================================== ДОСТУПНЫЕ МОДЕЛИ GEMINI =========================================="));
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
-        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                    | Лимиты(I/O) | Статус    |"));
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
+        Serial.println(F("\n=============================================== ДОСТУПНЫЕ МОДЕЛИ GEMINI ==============================================="));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
+        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                    | Расход/Лимит в сут.  | Статус    |"));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
 
         int count = 0;
         for (JsonObject m : models) {
             const char* fullName = m["name"] | "";
             const char* dispName = m["displayName"] | "";
-            uint32_t inLimit = m["inputTokenLimit"] | 0;
-            uint32_t outLimit = m["outputTokenLimit"] | 0;
             
             // Проверяем, поддерживает ли модель генерацию контента
             bool supportsGen = false;
@@ -324,24 +353,45 @@ bool GeminiClient::listAvailableModels() {
             _cachedModels.push_back(modelId);
             count++;
 
-            String limitStr = "-";
-            if (inLimit > 0 || outLimit > 0) {
-                limitStr = formatTokensShort(inLimit) + " / " + formatTokensShort(outLimit);
-            }
-
             bool isActive = (modelId.equalsIgnoreCase(cfg.model));
             const char* statusStr = isActive ? "[АКТИВНА]" : "         ";
             
-            Serial.printf("| %2d | %-38s | %-35s | %-11s | %s |\n", 
-                          count, 
-                          modelId.c_str(), 
-                          dispName, 
-                          limitStr.c_str(),
-                          statusStr);
+            String limitStr;
+            if (isActive && _usageTracker) {
+                DailyUsageStats st = _usageTracker->getStats();
+                if (st.dailyRequestLimit > 0) {
+                    limitStr = String(st.requestsToday) + " / " + String(st.dailyRequestLimit) + " запр.";
+                } else {
+                    limitStr = String(st.requestsToday) + " запр. (безлим)";
+                }
+            } else {
+                uint32_t lim = getModelDailyLimit(modelId);
+                limitStr = String(lim) + " запр/сутки";
+            }
+
+            Serial.printf("| %2d | ", count);
+            printCell(modelId, 38);
+            Serial.print(" | ");
+            printCell(dispName, 35);
+            Serial.print(" | ");
+            printCell(limitStr, 20);
+            Serial.printf(" | %s |\n", statusStr);
         }
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
         Serial.printf("Всего поддерживаемых моделей: %d\n", count);
-        Serial.printf("Текущая активная модель: %s\n\n", cfg.model.c_str());
+        Serial.printf("Текущая активная модель: %s\n", cfg.model.c_str());
+        if (_usageTracker) {
+            DailyUsageStats st = _usageTracker->getStats();
+            if (st.dailyRequestLimit > 0) {
+                int rem = (int)st.dailyRequestLimit - (int)st.requestsToday;
+                if (rem < 0) rem = 0;
+                Serial.printf("Суточный расход текущей модели: %u из %u запросов (Осталось на сегодня: %d)\n", 
+                              st.requestsToday, st.dailyRequestLimit, rem);
+            } else {
+                Serial.printf("Суточный расход текущей модели: %u запросов (Безлимитный режим)\n", st.requestsToday);
+            }
+            Serial.printf("Сброс суточных лимитов через: %s\n\n", _usageTracker->getTimeUntilMidnight().c_str());
+        }
         Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 24') или 'set model <id>'.\n"));
 
         http.end();

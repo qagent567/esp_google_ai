@@ -19,8 +19,8 @@ SerialCLI* cli;
 void setUp(void) {
     cfg = new ConfigManager();
     net = new NetworkManager(*cfg);
-    gem = new GeminiClient(*cfg);
     usage = new UsageTracker();
+    gem = new GeminiClient(*cfg, usage);
     cli = new SerialCLI(*cfg, *net, *gem, *usage);
 }
 

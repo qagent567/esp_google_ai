@@ -19,12 +19,20 @@ struct GeminiResponse {
     unsigned long durationMs; // Время выполнения запроса в миллисекундах
 };
 
+class UsageTracker;
+
 /**
  * @brief Клиент для взаимодействия с Google AI Studio (Gemini API)
  */
 class GeminiClient {
 public:
-    GeminiClient(ConfigManager& configMgr);
+    GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker = nullptr);
+
+    // Установка указателя на UsageTracker
+    void setUsageTracker(UsageTracker* tracker) { _usageTracker = tracker; }
+
+    // Определение суточного лимита модели (RPD)
+    static uint32_t getModelDailyLimit(const String& modelId);
 
     // Отправка текстового запроса (промпта) к Gemini
     GeminiResponse ask(const String& prompt);
@@ -59,5 +67,6 @@ public:
 
 private:
     ConfigManager& _configMgr;
+    UsageTracker* _usageTracker;
     std::vector<String> _cachedModels;
 };
