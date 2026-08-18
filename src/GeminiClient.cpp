@@ -58,6 +58,8 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     filter["candidates"][0]["content"]["parts"][0]["text"] = true;
     filter["candidates"][0]["finishReason"] = true;
     filter["usageMetadata"]["totalTokenCount"] = true;
+    filter["usageMetadata"]["promptTokenCount"] = true;
+    filter["usageMetadata"]["candidatesTokenCount"] = true;
     filter["error"]["message"] = true;
     filter["error"]["status"] = true;
     filter["error"]["code"] = true;
@@ -92,7 +94,9 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
             if (generatedText != nullptr) {
                 response.success = true;
                 response.text = String(generatedText);
-                response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | 0;
+                response.promptTokens = doc["usageMetadata"]["promptTokenCount"] | 0;
+                response.candidateTokens = doc["usageMetadata"]["candidatesTokenCount"] | 0;
+                response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | (response.promptTokens + response.candidateTokens);
                 return true;
             }
         }
@@ -195,6 +199,31 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     return result;
 }
 
+static String formatTokensShort(uint32_t tokens) {
+    if (tokens == 0) return "-";
+    if (tokens >= 1000000) {
+        if (tokens % 1000000 == 0) {
+            return String(tokens / 1000000) + "M";
+        } else {
+            float m = tokens / 1000000.0f;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.1fM", m);
+            return String(buf);
+        }
+    }
+    if (tokens >= 1000) {
+        if (tokens % 1000 == 0) {
+            return String(tokens / 1000) + "K";
+        } else {
+            float k = tokens / 1000.0f;
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.1fK", k);
+            return String(buf);
+        }
+    }
+    return String(tokens);
+}
+
 bool GeminiClient::listAvailableModels() {
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -234,6 +263,8 @@ bool GeminiClient::listAvailableModels() {
         JsonDocument filter;
         filter["models"][0]["name"] = true;
         filter["models"][0]["displayName"] = true;
+        filter["models"][0]["inputTokenLimit"] = true;
+        filter["models"][0]["outputTokenLimit"] = true;
         filter["models"][0]["supportedGenerationMethods"] = true;
         filter["error"]["message"] = true;
 
@@ -260,15 +291,17 @@ bool GeminiClient::listAvailableModels() {
 
         _cachedModels.clear();
 
-        Serial.println(F("\n============================== ДОСТУПНЫЕ МОДЕЛИ GEMINI =============================="));
-        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
-        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                  | Статус   |"));
-        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
+        Serial.println(F("\n========================================== ДОСТУПНЫЕ МОДЕЛИ GEMINI =========================================="));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
+        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                    | Лимиты(I/O) | Статус    |"));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
 
         int count = 0;
         for (JsonObject m : models) {
             const char* fullName = m["name"] | "";
             const char* dispName = m["displayName"] | "";
+            uint32_t inLimit = m["inputTokenLimit"] | 0;
+            uint32_t outLimit = m["outputTokenLimit"] | 0;
             
             // Проверяем, поддерживает ли модель генерацию контента
             bool supportsGen = false;
@@ -291,19 +324,25 @@ bool GeminiClient::listAvailableModels() {
             _cachedModels.push_back(modelId);
             count++;
 
+            String limitStr = "-";
+            if (inLimit > 0 || outLimit > 0) {
+                limitStr = formatTokensShort(inLimit) + " / " + formatTokensShort(outLimit);
+            }
+
             bool isActive = (modelId.equalsIgnoreCase(cfg.model));
-            const char* statusStr = isActive ? "[АКТИВНА]" : "        ";
+            const char* statusStr = isActive ? "[АКТИВНА]" : "         ";
             
-            Serial.printf("| %2d | %-38s | %-33s | %s |\n", 
+            Serial.printf("| %2d | %-38s | %-35s | %-11s | %s |\n", 
                           count, 
                           modelId.c_str(), 
                           dispName, 
+                          limitStr.c_str(),
                           statusStr);
         }
-        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+-------------+-----------+"));
         Serial.printf("Всего поддерживаемых моделей: %d\n", count);
         Serial.printf("Текущая активная модель: %s\n\n", cfg.model.c_str());
-        Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 1') или 'set model <id>'.\n"));
+        Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 24') или 'set model <id>'.\n"));
 
         http.end();
         return true;

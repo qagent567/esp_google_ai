@@ -408,8 +408,13 @@ void SerialCLI::registerCommands() {
         if (_configMgr.getConfig().apiKey.isEmpty()) { Serial.println(ANSI_RED "[ОШИБКА] Не задан API-ключ Gemini!" ANSI_RESET); return; }
         Serial.printf(ANSI_CYAN "\n[Gemini AI] Отправка запроса к модели %s...\n" ANSI_RESET, _configMgr.getConfig().model.c_str());
         GeminiResponse res = _geminiClient.ask(prompt);
-        if (res.success) { Serial.println(res.text); Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d\n\n" ANSI_RESET, res.durationMs, res.totalTokens); }
-        else { Serial.printf(ANSI_RED "[ОШИБКА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode); }
+        if (res.success) { 
+            Serial.println(res.text); 
+            Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d (Запрос: %d, Ответ: %d | Лимит: %d)\n\n" ANSI_RESET, 
+                          res.durationMs, res.totalTokens, res.promptTokens, res.candidateTokens, _configMgr.getConfig().maxTokens); 
+        } else { 
+            Serial.printf(ANSI_RED "[ОШИБКА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode); 
+        }
     });
     addCommand("selftest", "Запустить автоматический набор тестов прошивки", "Система", [this](int argc, String argv[]) { runSelfTest(); });
 }

@@ -13,7 +13,9 @@ struct GeminiResponse {
     bool success;           // Флаг успешности
     int httpCode;           // HTTP статус-код (200, 400, 403, 500 и т.д.)
     String text;            // Текст ответа нейросети или текст ошибки
-    int totalTokens;        // Использовано токенов (если доступно)
+    int promptTokens;       // Токенов во входящем запросе
+    int candidateTokens;    // Токенов в ответе нейросети
+    int totalTokens;        // Суммарно использовано токенов
     unsigned long durationMs; // Время выполнения запроса в миллисекундах
 };
 
