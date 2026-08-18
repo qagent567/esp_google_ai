@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "Легковесная и мощная библиотека для интеграции Google Gemini AI Studio в проекты на ESP32 с аппаратным управлением GPIO/ADC/I2C и Smart DNS обходом ограничений.",
   "keywords": "gemini, google ai, esp32, ai, llm, iot, gpio, hardware control",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qagent567/esp_google_ai.git"
+  },
   "authors": [
     {
       "name": "NuclearWork",
+      "email": "NuclearWork@users.noreply.github.com",
       "maintainer": true
     }
   ],
@@ -21,7 +26,8 @@
       "examples/*",
       "library.json",
       "library.properties",
-      "README.md"
+      "README.md",
+      "LICENSE"
     ]
   }
 }
