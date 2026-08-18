@@ -8,13 +8,15 @@ void SerialCLI::begin() {
     _inputBuffer.reserve(256);
     printWelcome();
     
-    if (!_configMgr.isConfigured()) {
-        Serial.println(F("\n[!] Устройство еще не настроено (нет сохраненных параметров Wi-Fi и API ключа)."));
+    if (_configMgr.hasSavedConfig()) {
+        Serial.printf("\n[СИСТЕМА] Найдена сохраненная конфигурация (Сеть: '%s', API-ключ настроен).\n", 
+                      _configMgr.getConfig().wifiSsid.c_str());
+        Serial.println(F("[СИСТЕМА] Пароль Wi-Fi хранится только в RAM до перезагрузки платы."));
+        startWizard(WizardType::PASSWORD_PROMPT);
+    } else {
+        Serial.println(F("\n[!] Устройство еще не настроено (нет сохраненной конфигурации)."));
         Serial.println(F("[!] Автоматический запуск мастера первоначальной настройки...\n"));
         startWizard(WizardType::FULL);
-    } else {
-        Serial.println(F("\n[СИСТЕМА] Настройки загружены из памяти. Система готова к работе."));
-        printPrompt();
     }
 }
 
@@ -51,9 +53,9 @@ void SerialCLI::printHelp() {
     Serial.println(F("\n--- СПИСОК ДОСТУПНЫХ КОМАНД ---"));
     Serial.println(F(" Настройки Wi-Fi:"));
     Serial.println(F("   set ssid <имя_сети>      - Установить имя Wi-Fi сети"));
-    Serial.println(F("   set pass <пароль>        - Установить пароль Wi-Fi сети"));
+    Serial.println(F("   set pass <пароль>        - Установить пароль Wi-Fi (в RAM до перезагрузки)"));
     Serial.println(F("   scan                     - Сканировать доступные сети Wi-Fi"));
-    Serial.println(F("   connect                  - Подключиться / переподключиться к Wi-Fi"));
+    Serial.println(F("   connect                  - Подключиться к Wi-Fi (нажмите 'e' для отмены)"));
     Serial.println(F("   disconnect               - Отключиться от Wi-Fi"));
     Serial.println(F(""));
     Serial.println(F(" Настройки Google AI (Gemini):"));
@@ -73,10 +75,10 @@ void SerialCLI::printHelp() {
     Serial.println(F("   test                     - Тестовый пинг-запрос к Gemini API"));
     Serial.println(F("   demo automation          - Демонстрация использования AI в коде (сенсоры)"));
     Serial.println(F("   status                   - Показать текущее состояние и настройки"));
-    Serial.println(F("   setup wifi               - Интерактивная настройка Wi-Fi"));
+    Serial.println(F("   setup wifi               - Интерактивная настройка Wi-Fi с проверкой связи"));
     Serial.println(F("   setup ai                 - Интерактивная настройка параметров нейросети"));
-    Serial.println(F("   wizard                   - Полный пошаговый мастер первой настройки"));
-    Serial.println(F("   save                     - Сохранить все параметры во Flash (NVS)"));
+    Serial.println(F("   wizard                   - Полный пошаговый мастер настройки"));
+    Serial.println(F("   save                     - Сохранить текущие параметры во Flash (NVS)"));
     Serial.println(F("   reset                    - Сбросить все настройки на значения по умолчанию"));
     Serial.println(F("   reboot                   - Перезагрузить микроконтроллер ESP32"));
     Serial.println(F("   help / ?                 - Показать это меню помощи"));
@@ -88,7 +90,7 @@ void SerialCLI::printStatus() {
 
     Serial.println(F("\n================ ТЕКУЩИЙ СТАТУС ================"));
     Serial.printf(" [СЕТЬ] Wi-Fi SSID       : %s\n", cfg.wifiSsid.isEmpty() ? "[Не задан]" : cfg.wifiSsid.c_str());
-    Serial.printf(" [СЕТЬ] Пароль           : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
+    Serial.printf(" [СЕТЬ] Пароль (RAM)     : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
     Serial.printf(" [СЕТЬ] Статус           : %s\n", _netMgr.isConnected() ? "ПОДКЛЮЧЕНО" : "ОТКЛЮЧЕНО");
     Serial.printf(" [СЕТЬ] Локальный IP     : %s\n", _netMgr.getLocalIP().c_str());
     Serial.printf(" [СЕТЬ] Уровень сигнала  : %d dBm\n", _netMgr.getRSSI());
@@ -128,14 +130,33 @@ void SerialCLI::startWizard(WizardType type) {
         Serial.println(F("Для отмены введите 'cancel' в любой момент."));
         Serial.println(F("ШАГ 1/2: Введите API-ключ Google AI Studio (Gemini API Key):"));
         Serial.println(F("(Получить ключ бесплатно можно на https://aistudio.google.com/app/apikey)"));
+    } else if (type == WizardType::PASSWORD_PROMPT) {
+        Serial.println(F("           АВТОРИЗАЦИЯ СЕССИИ WI-FI             "));
+        Serial.println(F("========================================================"));
+        Serial.printf("Сеть: '%s'\n", _configMgr.getConfig().wifiSsid.c_str());
+        Serial.println(F("Введите пароль от Wi-Fi (или 'e' для отмены):"));
     }
 }
 
 void SerialCLI::handleWizardStep(const String& input) {
-    if (input.equalsIgnoreCase("cancel")) {
+    if (input.equalsIgnoreCase("cancel") || (_currentWizard == WizardType::PASSWORD_PROMPT && input.equalsIgnoreCase("e"))) {
         _currentWizard = WizardType::NONE;
         _wizardStep = 0;
-        Serial.println(F("[WIZARD] Настройка отменена."));
+        Serial.println(F("[WIZARD] Действие отменено пользователем."));
+        return;
+    }
+
+    if (_currentWizard == WizardType::PASSWORD_PROMPT) {
+        _configMgr.getConfig().wifiPassword = input;
+        _currentWizard = WizardType::NONE;
+        _wizardStep = 0;
+
+        Serial.println(F("[Wi-Fi] Попытка подключения к сети..."));
+        if (_netMgr.connect()) {
+            Serial.println(F("[СИСТЕМА] Подключение успешно! Сессия активна до перезагрузки."));
+        } else {
+            Serial.println(F("[ВНИМАНИЕ] Подключение не удалось. Введите 'connect' или 'setup wifi'."));
+        }
         return;
     }
 
@@ -152,11 +173,18 @@ void SerialCLI::handleWizardStep(const String& input) {
         } else if (_wizardStep == 3) {
             if (input.isEmpty()) { Serial.println(F("[WIZARD] API-ключ не может быть пустым. Введите API-ключ:")); return; }
             _configMgr.getConfig().apiKey = input;
-            _configMgr.save();
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
-            Serial.println(F("\n[WIZARD] Все параметры успешно настроены и сохранены во Flash!"));
-            _netMgr.connect();
+
+            Serial.println(F("\n[WIZARD] Проверка подключения к Wi-Fi перед сохранением..."));
+            if (_netMgr.connect()) {
+                // Сохранение выполняется только после успешного подключения
+                _configMgr.save();
+                Serial.println(F("[УСПЕХ] Конфигурация успешно сохранена в NVS (пароль в RAM до перезагрузки)!"));
+            } else {
+                Serial.println(F("[ВНИМАНИЕ] Не удалось подключиться к сети. Параметры НЕ сохранены во Flash."));
+                Serial.println(F("Используйте команду 'wizard' или 'setup wifi' для повтора."));
+            }
         }
     } else if (_currentWizard == WizardType::WIFI) {
         if (_wizardStep == 1) {
@@ -166,11 +194,16 @@ void SerialCLI::handleWizardStep(const String& input) {
             Serial.println(F("ШАГ 2/2: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):"));
         } else if (_wizardStep == 2) {
             _configMgr.getConfig().wifiPassword = input;
-            _configMgr.save();
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
-            Serial.println(F("\n[WIZARD] Настройки Wi-Fi успешно сохранены!"));
-            _netMgr.connect();
+
+            Serial.println(F("\n[WIZARD] Проверка подключения к Wi-Fi перед сохранением..."));
+            if (_netMgr.connect()) {
+                _configMgr.save();
+                Serial.println(F("[УСПЕХ] Wi-Fi сеть успешно подключена и сохранена!"));
+            } else {
+                Serial.println(F("[ВНИМАНИЕ] Не удалось подключиться к сети. Параметры НЕ сохранены во Flash."));
+            }
         }
     } else if (_currentWizard == WizardType::AI) {
         if (_wizardStep == 1) {
@@ -186,7 +219,7 @@ void SerialCLI::handleWizardStep(const String& input) {
             _configMgr.save();
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
-            Serial.println(F("\n[WIZARD] Настройки AI успешно сохранены!"));
+            Serial.println(F("\n[WIZARD] Настройки AI успешно сохранены во Flash!"));
         }
     }
 }
@@ -222,7 +255,11 @@ void SerialCLI::handleCommand(String line) {
     } else if (lower == "disconnect") {
         _netMgr.disconnect();
     } else if (lower == "save") {
-        _configMgr.save();
+        if (_netMgr.isConnected()) {
+            _configMgr.save();
+        } else {
+            Serial.println(F("[ВНИМАНИЕ] Сохранение разрешено только при активном подключении к сети! Сначала выполните 'connect'."));
+        }
     } else if (lower == "reset") {
         _configMgr.resetToDefaults();
         _configMgr.save();
@@ -259,38 +296,36 @@ void SerialCLI::handleCommand(String line) {
         String val = line.substring(9);
         val.trim();
         _configMgr.getConfig().wifiSsid = val;
-        _configMgr.save();
-        Serial.printf("[ОК] Wi-Fi SSID установлен: '%s' (сохранено)\n", val.c_str());
+        Serial.printf("[ОК] Wi-Fi SSID установлен в сессии: '%s'. Выполните 'connect' для проверки и сохранения.\n", val.c_str());
     } else if (lower.startsWith("set pass ")) {
         String val = line.substring(9);
         val.trim();
         _configMgr.getConfig().wifiPassword = val;
-        _configMgr.save();
-        Serial.println(F("[ОК] Пароль Wi-Fi обновлен и сохранен."));
+        Serial.println(F("[ОК] Пароль Wi-Fi установлен для текущей сессии (в RAM). Выполните 'connect'."));
     } else if (lower.startsWith("set key ")) {
         String val = line.substring(8);
         val.trim();
         _configMgr.setApiKey(val);
         _configMgr.save();
-        Serial.println(F("[ОК] API-ключ Gemini сохранен."));
+        Serial.println(F("[ОК] API-ключ Gemini сохранен во Flash."));
     } else if (lower.startsWith("set model ")) {
         String val = line.substring(10);
         val.trim();
         _configMgr.setModel(val);
         _configMgr.save();
-        Serial.printf("[ОК] Модель Gemini изменена на: '%s' (сохранено)\n", val.c_str());
+        Serial.printf("[ОК] Модель Gemini изменена на: '%s' (сохранено во Flash)\n", val.c_str());
     } else if (lower.startsWith("set prompt ")) {
         String val = line.substring(11);
         val.trim();
         _configMgr.setSystemPrompt(val);
         _configMgr.save();
-        Serial.printf("[ОК] Системный промпт обновлен: '%s' (сохранено)\n", val.c_str());
+        Serial.printf("[ОК] Системный промпт обновлен: '%s' (сохранено во Flash)\n", val.c_str());
     } else if (lower.startsWith("set tokens ")) {
         int tokens = line.substring(11).toInt();
         if (tokens > 0 && tokens <= 8192) {
             _configMgr.setMaxTokens(tokens);
             _configMgr.save();
-            Serial.printf("[ОК] Макс. токенов установлено: %d (сохранено)\n", tokens);
+            Serial.printf("[ОК] Макс. токенов установлено: %d (сохранено во Flash)\n", tokens);
         } else {
             Serial.println(F("[ОШИБКА] Значение токенов должно быть от 1 до 8192."));
         }
@@ -299,7 +334,7 @@ void SerialCLI::handleCommand(String line) {
         if (temp >= 0.0f && temp <= 2.0f) {
             _configMgr.setTemperature(temp);
             _configMgr.save();
-            Serial.printf("[ОК] Температура генерации установлена: %.2f (сохранено)\n", temp);
+            Serial.printf("[ОК] Температура генерации установлена: %.2f (сохранено во Flash)\n", temp);
         } else {
             Serial.println(F("[ОШИБКА] Температура должна быть в диапазоне от 0.0 до 2.0."));
         }
@@ -315,7 +350,7 @@ void SerialCLI::handleCommand(String line) {
         _configMgr.setDns(dns1, dns2);
         _configMgr.save();
         _netMgr.applyCustomDNS();
-        Serial.printf("[ОК] Smart DNS обновлен: %s, %s (сохранено)\n", dns1.c_str(), dns2.isEmpty() ? "нет" : dns2.c_str());
+        Serial.printf("[ОК] Smart DNS обновлен: %s, %s (сохранено во Flash)\n", dns1.c_str(), dns2.isEmpty() ? "нет" : dns2.c_str());
     } else {
         // Если это команда "ask <prompt>" или просто введен текст для Gemini
         String prompt = line;
@@ -325,7 +360,7 @@ void SerialCLI::handleCommand(String line) {
         }
 
         if (!_netMgr.isConnected()) {
-            Serial.println(F("[ОШИБКА] Нет подключения к Wi-Fi! Введите 'connect' или 'wizard'."));
+            Serial.println(F("[ОШИБКА] Нет подключения к Wi-Fi! Введите пароль или используйте команду 'connect'."));
             return;
         }
 

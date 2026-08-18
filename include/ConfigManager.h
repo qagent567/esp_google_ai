@@ -7,10 +7,10 @@
  * @brief Структура для хранения настроек устройства в энергонезависимой памяти (NVS)
  */
 struct AppConfig {
-    String wifiSsid;        // SSID точки доступа Wi-Fi
-    String wifiPassword;    // Пароль от Wi-Fi
-    String apiKey;          // API-ключ Google AI Studio (Gemini)
-    String model;           // Название модели Gemini (например, gemini-2.0-flash)
+    String wifiSsid;        // SSID точки доступа Wi-Fi (сохраняется во Flash)
+    String wifiPassword;    // Пароль от Wi-Fi (хранится только в RAM до перезагрузки)
+    String apiKey;          // API-ключ Google AI Studio (сохраняется во Flash)
+    String model;           // Название модели Gemini (сохраняется во Flash)
     String dnsPrimary;      // Основной Smart DNS (xbox-dns.ru: 111.88.96.50)
     String dnsSecondary;    // Дополнительный Smart DNS (xbox-dns.ru: 111.88.96.51)
     String systemPrompt;    // Системный промпт (инструкция роли)
@@ -33,13 +33,16 @@ public:
     // Загрузка настроек из NVS
     void load();
 
-    // Сохранение текущих настроек в NVS
+    // Сохранение текущих настроек в NVS (вызывается только после успешного подключения)
     bool save();
 
     // Сброс настроек на значения по умолчанию
     void resetToDefaults();
 
-    // Проверка, заданы ли минимально необходимые параметры (Wi-Fi и API ключ)
+    // Проверка, сохранены ли основные параметры (SSID и API-ключ)
+    bool hasSavedConfig() const;
+
+    // Проверка готовности к работе в текущей сессии (есть SSID, API-ключ и пароль в RAM)
     bool isConfigured() const;
 
     // Геттеры и сеттеры

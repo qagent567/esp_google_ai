@@ -1,4 +1,4 @@
-#include "GeminiClient.h"
+    #include "GeminiClient.h"
 
 // Хост Google AI Studio API
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";

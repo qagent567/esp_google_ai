@@ -14,7 +14,8 @@ public:
         NONE,
         FULL,
         WIFI,
-        AI
+        AI,
+        PASSWORD_PROMPT
     };
 
     SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient);

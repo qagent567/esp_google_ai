@@ -27,7 +27,7 @@ bool ConfigManager::begin() {
 
 void ConfigManager::resetToDefaults() {
     _config.wifiSsid = "";
-    _config.wifiPassword = "";
+    _config.wifiPassword = ""; // Пароль хранится только в RAM
     _config.apiKey = "";
     _config.model = DEFAULT_MODEL;
     _config.dnsPrimary = DEFAULT_DNS_PRIMARY;
@@ -40,7 +40,9 @@ void ConfigManager::resetToDefaults() {
 
 void ConfigManager::load() {
     _config.wifiSsid = _prefs.getString("ssid", "");
-    _config.wifiPassword = _prefs.getString("pass", "");
+    _config.wifiPassword = ""; // Пароль намеренно НЕ читается из Flash (только RAM до перезагрузки)
+    _prefs.remove("pass");     // Удаляем пароль из NVS, если он был записан ранее
+
     _config.apiKey = _prefs.getString("api_key", "");
     _config.model = _prefs.getString("model", DEFAULT_MODEL);
     _config.dnsPrimary = _prefs.getString("dns1", DEFAULT_DNS_PRIMARY);
@@ -63,7 +65,7 @@ bool ConfigManager::save() {
     _config.isConfigured = (!_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
 
     ok &= (_prefs.putString("ssid", _config.wifiSsid) > 0 || _config.wifiSsid.isEmpty());
-    ok &= (_prefs.putString("pass", _config.wifiPassword) > 0 || _config.wifiPassword.isEmpty());
+    _prefs.remove("pass"); // Пароль не сохраняется в NVS Flash
     ok &= (_prefs.putString("api_key", _config.apiKey) > 0 || _config.apiKey.isEmpty());
     ok &= (_prefs.putString("model", _config.model) > 0);
     ok &= (_prefs.putString("dns1", _config.dnsPrimary) > 0);
@@ -74,15 +76,19 @@ bool ConfigManager::save() {
     ok &= _prefs.putBool("configured", _config.isConfigured);
 
     if (ok) {
-        Serial.println(F("[УСПЕХ] Настройки успешно сохранены в NVS память!"));
+        Serial.println(F("[УСПЕХ] Параметры сохранены в NVS (пароль Wi-Fi хранится в RAM до перезагрузки)."));
     } else {
         Serial.println(F("[ПРЕДУПРЕЖДЕНИЕ] Некоторые параметры не удалось записать в NVS."));
     }
     return ok;
 }
 
-bool ConfigManager::isConfigured() const {
+bool ConfigManager::hasSavedConfig() const {
     return (_config.isConfigured && !_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
+}
+
+bool ConfigManager::isConfigured() const {
+    return hasSavedConfig() && !_config.wifiPassword.isEmpty();
 }
 
 void ConfigManager::setWifi(const String& ssid, const String& password) {

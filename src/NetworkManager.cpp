@@ -52,6 +52,7 @@ bool NetworkManager::connect() {
     }
 
     Serial.printf("[Wi-Fi] Подключение к сети: '%s'...\n", cfg.wifiSsid.c_str());
+    Serial.println(F("[Wi-Fi] Нажмите 'e' для отмены поиска и подключения."));
     
     // Сброс предыдущего подключения
     WiFi.disconnect(true);
@@ -67,10 +68,19 @@ bool NetworkManager::connect() {
         WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPassword.c_str());
     }
 
-    // Ожидание подключения с таймаутом (до 15 секунд)
+    // Ожидание подключения с таймаутом (до 15 секунд) или отмена по нажатию 'e'
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-        delay(500);
+        // Проверка нажатия клавиши 'e' в терминале для остановки поиска
+        if (Serial.available()) {
+            char c = (char)Serial.read();
+            if (c == 'e' || c == 'E') {
+                WiFi.disconnect(true);
+                Serial.println(F("\n[Wi-Fi] Поиск сети остановлен пользователем (нажата клавиша 'e')."));
+                return false;
+            }
+        }
+        delay(250);
         Serial.print(F("."));
     }
     Serial.println();
