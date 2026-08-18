@@ -1,12 +1,33 @@
 #include "ConfigManager.h"
 
 // Значения по умолчанию
-static const char* DEFAULT_MODEL = "gemini-2.0-flash";
+static const char* DEFAULT_MODEL = "gemini-2.5-flash";
 static const char* DEFAULT_DNS_PRIMARY = "111.88.96.50";   // xbox-dns.ru Primary IPv4
 static const char* DEFAULT_DNS_SECONDARY = "111.88.96.51"; // xbox-dns.ru Secondary IPv4
 static const char* DEFAULT_SYSTEM_PROMPT = "Ты полезный AI-ассистент на ESP32. Отвечай кратко, понятно и по делу.";
 static const int DEFAULT_MAX_TOKENS = 1024;
 static const float DEFAULT_TEMPERATURE = 0.7f;
+
+// Вспомогательная функция санитизации строк
+static String sanitize(String str) {
+    str.trim();
+    while (str.endsWith("\r") || str.endsWith("\n") || str.endsWith(" ") || str.endsWith("\t")) {
+        str.remove(str.length() - 1);
+        str.trim();
+    }
+    while (str.startsWith("\r") || str.startsWith("\n") || str.startsWith(" ") || str.startsWith("\t")) {
+        str.remove(0, 1);
+        str.trim();
+    }
+    // Удаление обрамляющих кавычек, если пользователь ввел значение в кавычках
+    if ((str.startsWith("\"") && str.endsWith("\"")) || (str.startsWith("'") && str.endsWith("'"))) {
+        if (str.length() >= 2) {
+            str = str.substring(1, str.length() - 1);
+            str.trim();
+        }
+    }
+    return str;
+}
 
 ConfigManager::ConfigManager() {
     resetToDefaults();
@@ -27,7 +48,7 @@ bool ConfigManager::begin() {
 
 void ConfigManager::resetToDefaults() {
     _config.wifiSsid = "";
-    _config.wifiPassword = ""; // Пароль хранится только в RAM
+    _config.wifiPassword = "";
     _config.apiKey = "";
     _config.model = DEFAULT_MODEL;
     _config.dnsPrimary = DEFAULT_DNS_PRIMARY;
@@ -39,13 +60,14 @@ void ConfigManager::resetToDefaults() {
 }
 
 void ConfigManager::load() {
-    _config.wifiSsid = _prefs.getString("ssid", "");
-    _config.wifiPassword = _prefs.getString("pass", "");
-    _config.apiKey = _prefs.getString("api_key", "");
-    _config.model = _prefs.getString("model", DEFAULT_MODEL);
-    _config.dnsPrimary = _prefs.getString("dns1", DEFAULT_DNS_PRIMARY);
-    _config.dnsSecondary = _prefs.getString("dns2", DEFAULT_DNS_SECONDARY);
+    _config.wifiSsid = sanitize(_prefs.getString("ssid", ""));
+    _config.wifiPassword = sanitize(_prefs.getString("pass", ""));
+    _config.apiKey = sanitize(_prefs.getString("api_key", ""));
+    _config.model = sanitize(_prefs.getString("model", DEFAULT_MODEL));
+    _config.dnsPrimary = sanitize(_prefs.getString("dns1", DEFAULT_DNS_PRIMARY));
+    _config.dnsSecondary = sanitize(_prefs.getString("dns2", DEFAULT_DNS_SECONDARY));
     _config.systemPrompt = _prefs.getString("prompt", DEFAULT_SYSTEM_PROMPT);
+    _config.systemPrompt.trim();
     _config.maxTokens = _prefs.getInt("max_tokens", DEFAULT_MAX_TOKENS);
     _config.temperature = _prefs.getFloat("temp", DEFAULT_TEMPERATURE);
     _config.isConfigured = _prefs.getBool("configured", false);
@@ -60,6 +82,14 @@ void ConfigManager::load() {
 
 bool ConfigManager::save() {
     bool ok = true;
+    _config.wifiSsid = sanitize(_config.wifiSsid);
+    _config.wifiPassword = sanitize(_config.wifiPassword);
+    _config.apiKey = sanitize(_config.apiKey);
+    _config.model = sanitize(_config.model);
+    _config.dnsPrimary = sanitize(_config.dnsPrimary);
+    _config.dnsSecondary = sanitize(_config.dnsSecondary);
+    _config.systemPrompt.trim();
+
     _config.isConfigured = (!_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
 
     ok &= (_prefs.putString("ssid", _config.wifiSsid) > 0 || _config.wifiSsid.isEmpty());
@@ -85,27 +115,31 @@ bool ConfigManager::hasSavedConfig() const {
     return (_config.isConfigured && !_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
 }
 
+bool ConfigManager::hasSavedApiKey() const {
+    return !_config.apiKey.isEmpty();
+}
+
 bool ConfigManager::isConfigured() const {
     return hasSavedConfig() && !_config.wifiPassword.isEmpty();
 }
 
 void ConfigManager::setWifi(const String& ssid, const String& password) {
-    _config.wifiSsid = ssid;
-    _config.wifiPassword = password;
+    _config.wifiSsid = sanitize(ssid);
+    _config.wifiPassword = sanitize(password);
 }
 
 void ConfigManager::setApiKey(const String& apiKey) {
-    _config.apiKey = apiKey;
+    _config.apiKey = sanitize(apiKey);
 }
 
 void ConfigManager::setModel(const String& model) {
-    _config.model = model;
+    _config.model = sanitize(model);
 }
 
 void ConfigManager::setDns(const String& primary, const String& secondary) {
-    _config.dnsPrimary = primary;
+    _config.dnsPrimary = sanitize(primary);
     if (!secondary.isEmpty()) {
-        _config.dnsSecondary = secondary;
+        _config.dnsSecondary = sanitize(secondary);
     }
 }
 

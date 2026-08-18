@@ -8,7 +8,9 @@ GeminiClient::GeminiClient(ConfigManager& configMgr)
 
 String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
-    String url = String(GEMINI_API_HOST) + cfg.model + ":generateContent?key=" + cfg.apiKey;
+    String cleanModel = cfg.model; cleanModel.trim();
+    String cleanKey = cfg.apiKey; cleanKey.trim();
+    String url = String(GEMINI_API_HOST) + cleanModel + ":generateContent?key=" + cleanKey;
     return url;
 }
 
@@ -44,7 +46,14 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
 }
 
 bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& response) {
-    // Создаем фильтр для экономии RAM: парсим только нужные поля
+    if (jsonPayload.isEmpty()) {
+        response.success = false;
+        response.text = "Пустой ответ от сервера.";
+        return false;
+    }
+
+    JsonDocument doc;
+    // Парсим с фильтром для надежности и экономии оперативной памяти ESP32
     JsonDocument filter;
     filter["candidates"][0]["content"]["parts"][0]["text"] = true;
     filter["candidates"][0]["finishReason"] = true;
@@ -53,12 +62,16 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     filter["error"]["status"] = true;
     filter["error"]["code"] = true;
 
-    JsonDocument doc;
     DeserializationError err = deserializeJson(doc, jsonPayload, DeserializationOption::Filter(filter));
     if (err) {
-        response.success = false;
-        response.text = String("Ошибка парсинга JSON ответа: ") + err.c_str();
-        return false;
+        // Если фильтр не сработал (например, нестандартный JSON), пробуем прямой парсинг
+        err = deserializeJson(doc, jsonPayload);
+        if (err) {
+            response.success = false;
+            response.text = String("Ошибка парсинга ответа: ") + err.c_str() + 
+                            "\nСырой ответ сервера: " + jsonPayload.substring(0, 250);
+            return false;
+        }
     }
 
     // Проверка на ошибку в теле ответа от Google
@@ -66,39 +79,45 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         response.success = false;
         const char* errMsg = doc["error"]["message"] | "Неизвестная ошибка API";
         const char* errStatus = doc["error"]["status"] | "ERROR";
-        response.text = String("[Google API Error: ") + errStatus + "] " + errMsg;
+        int errCode = doc["error"]["code"] | 0;
+        response.text = String("[Google API: ") + errStatus + " (" + String(errCode) + ")] " + errMsg;
         return false;
     }
 
     // Извлечение сгенерированного текста
-    const char* generatedText = doc["candidates"][0]["content"]["parts"][0]["text"];
-    if (generatedText != nullptr) {
-        response.success = true;
-        response.text = String(generatedText);
-        response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | 0;
-        return true;
-    }
-
-    // Если нет текста, проверяем finishReason
-    const char* finishReason = doc["candidates"][0]["finishReason"];
-    if (finishReason != nullptr) {
-        response.success = false;
-        response.text = String("Ответ пуст. Причина завершения: ") + finishReason;
-        return false;
+    if (doc["candidates"] && doc["candidates"].is<JsonArray>() && doc["candidates"].size() > 0) {
+        JsonObject cand = doc["candidates"][0];
+        if (cand["content"] && cand["content"]["parts"] && cand["content"]["parts"].is<JsonArray>() && cand["content"]["parts"].size() > 0) {
+            const char* generatedText = cand["content"]["parts"][0]["text"];
+            if (generatedText != nullptr) {
+                response.success = true;
+                response.text = String(generatedText);
+                response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | 0;
+                return true;
+            }
+        }
+        
+        // Если нет текста, проверяем finishReason
+        const char* finishReason = cand["finishReason"];
+        if (finishReason != nullptr) {
+            response.success = false;
+            response.text = String("Генерация завершена без текста. Причина: ") + finishReason;
+            return false;
+        }
     }
 
     response.success = false;
-    response.text = "Не удалось извлечь текст ответа из структуры ответа Google.";
+    response.text = "Не удалось извлечь текст ответа. Ответ: " + jsonPayload.substring(0, 250);
     return false;
 }
 
 String GeminiClient::getHttpErrorDescription(int httpCode) {
     switch (httpCode) {
         case 200: return "OK (Успешно)";
-        case 400: return "Неверный запрос (Bad Request) - проверьте формат запроса или API ключ";
-        case 403: return "Доступ запрещен (Forbidden) - возможно, блокировка по региону (проверьте Smart DNS) или недействительный API-ключ";
-        case 404: return "Не найдено (Not Found) - проверьте правильность названия модели Gemini";
-        case 429: return "Превышен лимит запросов (Rate Limit Exceeded) - подождите немного перед следующим запросом";
+        case 400: return "Неверный запрос (Bad Request) - недействительный API-ключ или некорректный формат";
+        case 403: return "Доступ запрещен (Forbidden) - блокировка региона или ограничения ключа (проверьте Smart DNS)";
+        case 404: return "Не найдено (Not Found) - проверьте имя модели Gemini";
+        case 429: return "Превышен лимит запросов (Rate Limit Exceeded) - подождите перед следующим запросом";
         case 500: return "Внутренняя ошибка сервера Google";
         case 503: return "Сервис Google AI временно недоступен";
         case -1:  return "Ошибка соединения / таймаут (Connection Failed / Timeout)";
@@ -129,9 +148,8 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     unsigned long startTime = millis();
 
     WiFiClientSecure client;
-    // Отключаем проверку сертификатов для экономии оперативной памяти на ESP32
+    // Отключаем проверку сертификатов для оптимизации RAM на ESP32
     client.setInsecure();
-    // Установка таймаута сокета
     client.setTimeout(30);
 
     HTTPClient http;
@@ -144,7 +162,8 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     }
 
     http.addHeader("Content-Type", "application/json; charset=utf-8");
-    http.setTimeout(30000); // 30 секунд на генерацию ответа нейросетью
+    http.addHeader("x-goog-api-key", cfg.apiKey);
+    http.setTimeout(30000); // 30 секунд таймаут на генерацию нейросетью
 
     String requestBody = buildRequestBody(prompt);
 
@@ -157,9 +176,14 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
         if (httpResponseCode == 200) {
             parseResponse(payload, result);
         } else {
-            // Ошибка HTTP
-            if (!parseResponse(payload, result)) {
+            // Ошибка HTTP: пробуем распарсить JSON ошибки от Google
+            parseResponse(payload, result);
+            // Если parseResponse не смог распарсить ошибку Google, формируем подробное описание
+            if (result.text.isEmpty() || result.text.startsWith("Не удалось извлечь")) {
                 result.text = String("Ошибка HTTP ") + String(httpResponseCode) + ": " + getHttpErrorDescription(httpResponseCode);
+                if (!payload.isEmpty()) {
+                    result.text += "\nОтвет Google: " + payload.substring(0, 300);
+                }
             }
         }
     } else {
@@ -191,13 +215,15 @@ bool GeminiClient::listAvailableModels() {
     client.setTimeout(20);
 
     HTTPClient http;
-    String url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + cfg.apiKey;
+    String cleanKey = cfg.apiKey; cleanKey.trim();
+    String url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + cleanKey;
     
     if (!http.begin(client, url)) {
         Serial.println(F("[ОШИБКА] Не удалось инициализировать HTTPS соединение."));
         return false;
     }
 
+    http.addHeader("x-goog-api-key", cleanKey);
     http.setTimeout(20000);
     int httpCode = http.GET();
 
@@ -274,8 +300,19 @@ bool GeminiClient::listAvailableModels() {
         http.end();
         return true;
     } else {
+        String payload = (httpCode > 0) ? http.getString() : "";
         Serial.printf("[ОШИБКА] Не удалось получить список моделей. HTTP Код: %d (%s)\n", 
                       httpCode, getHttpErrorDescription(httpCode).c_str());
+        if (!payload.isEmpty()) {
+            JsonDocument errDoc;
+            if (!deserializeJson(errDoc, payload) && errDoc["error"]) {
+                Serial.printf("[ОТВЕТ GOOGLE API] %s: %s\n", 
+                              errDoc["error"]["status"] | "ERROR", 
+                              errDoc["error"]["message"] | "Неизвестная ошибка");
+            } else {
+                Serial.printf("[ОТВЕТ GOOGLE API] %s\n", payload.substring(0, 300).c_str());
+            }
+        }
         http.end();
         return false;
     }

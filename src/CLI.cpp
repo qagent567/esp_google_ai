@@ -164,12 +164,12 @@ void SerialCLI::handleWizardStep(const String& input) {
             if (input.isEmpty()) { 
                 if (_configMgr.getConfig().wifiSsid.isEmpty()) { Serial.println(ANSI_RED "[WIZARD] SSID не может быть пустым. Введите SSID сети:" ANSI_RESET); return; }
             } else {
-                _configMgr.getConfig().wifiSsid = input;
+                _configMgr.setWifi(input, _configMgr.getConfig().wifiPassword);
             }
             _wizardStep = 2;
             Serial.println("ШАГ 2/3: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):");
         } else if (_wizardStep == 2) {
-            _configMgr.getConfig().wifiPassword = input;
+            _configMgr.setWifi(_configMgr.getConfig().wifiSsid, input);
             _wizardStep = 3;
             Serial.println("ШАГ 3/3: Введите API-ключ Google AI Studio (Gemini API Key):");
             if (!_configMgr.getConfig().apiKey.isEmpty()) Serial.println("(Ключ уже сохранен. Нажмите Enter, чтобы оставить текущий)");
@@ -177,7 +177,7 @@ void SerialCLI::handleWizardStep(const String& input) {
             if (input.isEmpty()) { 
                 if (_configMgr.getConfig().apiKey.isEmpty()) { Serial.println(ANSI_RED "[WIZARD] API-ключ не может быть пустым. Введите API-ключ:" ANSI_RESET); return; }
             } else {
-                _configMgr.getConfig().apiKey = input;
+                _configMgr.setApiKey(input);
             }
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
@@ -194,12 +194,12 @@ void SerialCLI::handleWizardStep(const String& input) {
             if (input.isEmpty()) { 
                 if (_configMgr.getConfig().wifiSsid.isEmpty()) { Serial.println(ANSI_RED "[WIZARD] SSID не может быть пустым. Введите SSID сети:" ANSI_RESET); return; }
             } else {
-                _configMgr.getConfig().wifiSsid = input;
+                _configMgr.setWifi(input, _configMgr.getConfig().wifiPassword);
             }
             _wizardStep = 2;
             Serial.println("ШАГ 2/2: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):");
         } else if (_wizardStep == 2) {
-            _configMgr.getConfig().wifiPassword = input;
+            _configMgr.setWifi(_configMgr.getConfig().wifiSsid, input);
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
             Serial.println("\n[WIZARD] Проверка подключения к Wi-Fi перед сохранением...");
@@ -215,12 +215,12 @@ void SerialCLI::handleWizardStep(const String& input) {
             if (input.isEmpty()) { 
                 if (_configMgr.getConfig().apiKey.isEmpty()) { Serial.println(ANSI_RED "[WIZARD] API-ключ не может быть пустым. Введите API-ключ:" ANSI_RESET); return; }
             } else {
-                _configMgr.getConfig().apiKey = input;
+                _configMgr.setApiKey(input);
             }
             _wizardStep = 2;
             Serial.println("ШАГ 2/2: Введите системный промпт (или нажмите Enter для текущего):");
         } else if (_wizardStep == 2) {
-            if (!input.isEmpty()) { _configMgr.getConfig().systemPrompt = input; }
+            if (!input.isEmpty()) { _configMgr.setSystemPrompt(input); }
             _configMgr.save();
             _currentWizard = WizardType::NONE;
             _wizardStep = 0;
@@ -290,8 +290,8 @@ void SerialCLI::registerCommands() {
     addCommand("set", "Изменить настройку (set ssid, pass, key, model, prompt, tokens, temp, dns)", "Конфигурация", [this](int argc, String argv[]) {
         if (argc < 3) { Serial.println("Использование: set <параметр> <значение>"); return; }
         String param = argv[1]; String val = argv[2];
-        if (param == "ssid") { _configMgr.getConfig().wifiSsid = val; Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", val.c_str()); }
-        else if (param == "pass") { _configMgr.getConfig().wifiPassword = val; Serial.println("[ОК] Пароль Wi-Fi установлен."); }
+        if (param == "ssid") { _configMgr.setWifi(val, _configMgr.getConfig().wifiPassword); Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", _configMgr.getConfig().wifiSsid.c_str()); }
+        else if (param == "pass") { _configMgr.setWifi(_configMgr.getConfig().wifiSsid, val); Serial.println("[ОК] Пароль Wi-Fi установлен."); }
         else if (param == "key") { _configMgr.setApiKey(val); _configMgr.save(); Serial.println("[ОК] API-ключ сохранен."); }
         else if (param == "model") { _configMgr.setModel(val); _configMgr.save(); Serial.printf("[ОК] Модель: '%s'\n", val.c_str()); }
         else if (param == "prompt") { _configMgr.setSystemPrompt(val); _configMgr.save(); Serial.println("[ОК] Промпт обновлен."); }
@@ -325,6 +325,7 @@ void SerialCLI::registerCommands() {
         if (res.success) { Serial.println(res.text); Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d\n\n" ANSI_RESET, res.durationMs, res.totalTokens); }
         else { Serial.printf(ANSI_RED "[ОШИБКА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode); }
     });
+    addCommand("selftest", "Запустить автоматический набор тестов прошивки", "Система", [this](int argc, String argv[]) { runSelfTest(); });
 }
 
 void SerialCLI::handleCommand(String line) {
@@ -438,3 +439,130 @@ void SerialCLI::update() {
         }
     }
 }
+
+void SerialCLI::runSelfTest() {
+    Serial.println(F("\n========================================================"));
+    Serial.println(F("         ЗАПУСК ВСТРОЕННЫХ ТЕСТОВ (SELF-TEST)          "));
+    Serial.println(F("========================================================"));
+    
+    int passed = 0;
+    int failed = 0;
+
+    auto assertTest = [&](const char* name, bool condition) {
+        if (condition) {
+            Serial.printf(ANSI_GREEN " [PASS] %s\n" ANSI_RESET, name);
+            passed++;
+        } else {
+            Serial.printf(ANSI_RED " [FAIL] %s\n" ANSI_RESET, name);
+            failed++;
+        }
+    };
+
+    // 1. Тесты ConfigManager и санитизации
+    Serial.println(ANSI_CYAN "\n--- 1. Тесты менеджера конфигурации и санитизации ---" ANSI_RESET);
+    {
+        ConfigManager testCfg;
+        assertTest("Значения по умолчанию (gemini-2.5-flash, DNS)", 
+                   testCfg.getConfig().model == "gemini-2.5-flash" && 
+                   testCfg.getConfig().dnsPrimary == "111.88.96.50");
+
+        testCfg.setWifi("  0266\r\n\t ", " 18888888\r\n ");
+        assertTest("Санитизация Wi-Fi SSID и пароля", 
+                   testCfg.getConfig().wifiSsid == "0266" && 
+                   testCfg.getConfig().wifiPassword == "18888888");
+
+        testCfg.setApiKey(" \r\n AQ.Ab8RN6LtR0RySZwOW5SYz3eyFtZaCebV6Ta-Thsq5OVhiPAg1Q \n ");
+        assertTest("Санитизация API-ключа (пробелы, переносы строк)", 
+                   testCfg.getConfig().apiKey == "AQ.Ab8RN6LtR0RySZwOW5SYz3eyFtZaCebV6Ta-Thsq5OVhiPAg1Q" && 
+                   testCfg.hasSavedApiKey());
+
+        testCfg.setApiKey("\"AIzaSyTest123\"");
+        assertTest("Удаление кавычек из API-ключа", 
+                   testCfg.getConfig().apiKey == "AIzaSyTest123");
+    }
+
+    // 2. Тесты парсинга CLI
+    Serial.println(ANSI_CYAN "\n--- 2. Тесты CLI парсера аргументов ---" ANSI_RESET);
+    {
+        String argv[10];
+        int argc = parseArgs("set ssid mywifi", argv, 10);
+        assertTest("Парсинг простых аргументов", argc == 3 && argv[0] == "set" && argv[1] == "ssid" && argv[2] == "mywifi");
+
+        argc = parseArgs("ask \"привет мир\"", argv, 10);
+        assertTest("Парсинг аргументов в кавычках", argc == 2 && argv[0] == "ask" && argv[1] == "привет мир");
+
+        argc = parseArgs("", argv, 10);
+        assertTest("Парсинг пустой строки", argc == 0);
+    }
+
+    // 3. Тесты GeminiClient (JSON и структура запросов)
+    Serial.println(ANSI_CYAN "\n--- 3. Тесты генератора запросов и парсера Gemini ---" ANSI_RESET);
+    {
+        ConfigManager testCfg;
+        GeminiClient testGem(testCfg);
+
+        testCfg.setModel("gemini-2.0-flash");
+        testCfg.setApiKey("TEST_KEY_999");
+        String url = testGem.buildApiUrl();
+        assertTest("Формирование URL API", url.indexOf("gemini-2.0-flash:generateContent?key=TEST_KEY_999") >= 0);
+
+        testCfg.setSystemPrompt("Роль ассистента");
+        testCfg.setMaxTokens(512);
+        testCfg.setTemperature(0.5f);
+        String body = testGem.buildRequestBody("Тестовый вопрос");
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, body);
+        assertTest("Генерация валидного JSON тела запроса", !err && doc["contents"][0]["parts"][0]["text"] == "Тестовый вопрос");
+        assertTest("Наличие системного промпта в теле JSON", doc["systemInstruction"]["parts"][0]["text"] == "Роль ассистента");
+
+        // Тест парсинга успешного ответа
+        String mockSuccess = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Ответ от нейросети\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"totalTokenCount\":25}}";
+        GeminiResponse resp;
+        bool ok = testGem.parseResponse(mockSuccess, resp);
+        assertTest("Парсинг успешного ответа Google API", ok && resp.success && resp.text == "Ответ от нейросети" && resp.totalTokens == 25);
+
+        // Тест парсинга ошибки API
+        String mockErr = "{\"error\":{\"code\":400,\"message\":\"API key not valid.\",\"status\":\"INVALID_ARGUMENT\"}}";
+        ok = testGem.parseResponse(mockErr, resp);
+        assertTest("Парсинг ошибки Google API (INVALID_ARGUMENT)", !ok && !resp.success && resp.text.indexOf("API key not valid") >= 0);
+    }
+
+    // 4. Интеграционные тесты (сеть и реальный API)
+    Serial.println(ANSI_CYAN "\n--- 4. Интеграционная проверка (Hardware & Live API) ---" ANSI_RESET);
+    {
+        bool wifiOk = _netMgr.isConnected();
+        assertTest("Статус подключения к Wi-Fi сети", wifiOk);
+        if (wifiOk) {
+            Serial.printf("       IP: %s, RSSI: %d dBm, DNS: %s\n", 
+                          _netMgr.getLocalIP().c_str(), _netMgr.getRSSI(), _netMgr.getPrimaryDNS().c_str());
+        }
+
+        bool keyOk = _configMgr.hasSavedApiKey();
+        assertTest("Наличие настроенного API-ключа в NVS", keyOk);
+
+        if (wifiOk && keyOk) {
+            Serial.println(ANSI_CYAN " [AI]  Выполнение реального тестового запроса к Gemini..." ANSI_RESET);
+            GeminiResponse liveResp = _geminiClient.ask("Ответь строго одним словом: 'РАБОТАЕТ'");
+            if (liveResp.success) {
+                Serial.printf(ANSI_GREEN " [PASS] Реальный запрос к Gemini успешен! Ответ: %s (Время: %lu мс, Токенов: %d)\n" ANSI_RESET, 
+                              liveResp.text.c_str(), liveResp.durationMs, liveResp.totalTokens);
+                passed++;
+            } else {
+                Serial.printf(ANSI_RED " [FAIL] Ошибка живого запроса (HTTP %d): %s\n" ANSI_RESET, liveResp.httpCode, liveResp.text.c_str());
+                failed++;
+            }
+        } else {
+            Serial.println(ANSI_YELLOW " [SKIP] Пропуск живого запроса к API (требуется подключение к Wi-Fi и API-ключ)." ANSI_RESET);
+        }
+    }
+
+    Serial.println(F("\n========================================================"));
+    Serial.printf("ИТОГ ТЕСТИРОВАНИЯ: Успешно: %d | Сбоев: %d\n", passed, failed);
+    if (failed == 0) {
+        Serial.println(ANSI_GREEN "РЕЗУЛЬТАТ: ВСЕ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО [100% OK]" ANSI_RESET);
+    } else {
+        Serial.println(ANSI_RED "РЕЗУЛЬТАТ: ОБНАРУЖЕНЫ ОШИБКИ В ТЕСТАХ" ANSI_RESET);
+    }
+    Serial.println(F("========================================================\n"));
+}
+

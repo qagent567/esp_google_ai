@@ -42,6 +42,9 @@ public:
     // Проверка, сохранены ли основные параметры (SSID и API-ключ)
     bool hasSavedConfig() const;
 
+    // Проверка, сохранен ли API-ключ
+    bool hasSavedApiKey() const;
+
     // Проверка готовности к работе в текущей сессии (есть SSID, API-ключ и пароль в RAM)
     bool isConfigured() const;
 

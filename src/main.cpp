@@ -1,3 +1,5 @@
+#ifndef UNIT_TEST
+
 /**
  * @file main.cpp
  * @brief Основной файл проекта ESP32 + Google AI Studio (Gemini) с обходом блокировок РФ через Smart DNS
@@ -60,3 +62,5 @@ void loop() {
     // Уступаем квант времени планировщику FreeRTOS
     delay(5);
 }
+
+#endif // UNIT_TEST

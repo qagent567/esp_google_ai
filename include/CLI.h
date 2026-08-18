@@ -41,6 +41,9 @@ public:
     // Запуск мастера настройки (FULL, WIFI или AI)
     void startWizard(WizardType type = WizardType::FULL);
 
+    // Запуск встроенного набора тестов
+    void runSelfTest();
+
 private:
     ConfigManager& _configMgr;
     NetworkManager& _netMgr;

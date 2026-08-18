@@ -36,9 +36,6 @@ public:
     // Получить описание ошибки по HTTP коду
     static String getHttpErrorDescription(int httpCode);
 
-private:
-    ConfigManager& _configMgr;
-
     // Формирование URL эндпоинта
     String buildApiUrl() const;
 
@@ -47,4 +44,7 @@ private:
 
     // Парсинг JSON ответа от Google API с оптимизацией памяти
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
+
+private:
+    ConfigManager& _configMgr;
 };
