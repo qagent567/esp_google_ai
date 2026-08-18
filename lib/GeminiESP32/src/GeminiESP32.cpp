@@ -70,7 +70,7 @@ void GeminiESP32::enableHardwareControl(bool enable) {
 
 String GeminiESP32::ask(const String& prompt) {
     if (!_client) return "Клиент Gemini не инициализирован";
-    GeminiResponse resp = _client->sendPrompt(prompt);
+    GeminiResponse resp = _client->ask(prompt);
     return resp.text;
 }
 
@@ -81,7 +81,7 @@ GeminiResponse GeminiESP32::query(const String& prompt) {
         err.text = "Клиент Gemini не инициализирован";
         return err;
     }
-    return _client->sendPrompt(prompt);
+    return _client->ask(prompt);
 }
 
 bool GeminiESP32::ping() {
