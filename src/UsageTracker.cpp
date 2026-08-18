@@ -177,30 +177,30 @@ void UsageTracker::printQuotaReport() {
     float percentRemaining = (limit > 0) ? (100.0f - percentUsed) : 100.0f;
     if (percentRemaining < 0.0f) percentRemaining = 0.0f;
 
-    Serial.println(ANSI_CYAN "\n================== СУТОЧНЫЕ ЛИМИТЫ И РАСХОД (QUOTA) ==================" ANSI_RESET);
+    Serial.println(F("\n================== СУТОЧНЫЕ ЛИМИТЫ И РАСХОД (QUOTA) =================="));
     Serial.printf(" [ВРЕМЯ УСТРОЙСТВА]   : %s\n", getCurrentTimeString().c_str());
     if (limit > 0) {
         Serial.printf(" [СУТОЧНЫЙ ЛИМИТ]     : %u запросов / сутки (RPD)\n", limit);
-        Serial.printf(" [ИЗРАСХОДОВАНО СЕГОДНЯ]: " ANSI_BOLD "%u" ANSI_RESET " запросов (%.1f%%)\n", used, percentUsed);
+        Serial.printf(" [ИЗРАСХОДОВАНО СЕГОДНЯ]: %u запросов (%.1f%%)\n", used, percentUsed);
         if (remaining > 0) {
-            Serial.printf(" [ОСТАЛОСЬ НА СЕГОДНЯ]: " ANSI_GREEN ANSI_BOLD "%u" ANSI_RESET " запросов (%.1f%%)\n", remaining, percentRemaining);
+            Serial.printf(" [ОСТАЛОСЬ НА СЕГОДНЯ]: %u запросов (%.1f%%)\n", remaining, percentRemaining);
         } else {
-            Serial.printf(" [ОСТАЛОСЬ НА СЕГОДНЯ]: " ANSI_RED ANSI_BOLD "0" ANSI_RESET " (ЛИМИТ ИСЧЕРПАН!)\n");
+            Serial.println(F(" [ОСТАЛОСЬ НА СЕГОДНЯ]: 0 (ЛИМИТ ИСЧЕРПАН!)"));
         }
     } else {
-        Serial.println(" [СУТОЧНЫЙ ЛИМИТ]     : БЕЗЛИМИТНЫЙ РЕЖИМ (0 RPD)");
+        Serial.println(F(" [СУТОЧНЫЙ ЛИМИТ]     : БЕЗЛИМИТНЫЙ РЕЖИМ (0 RPD)"));
         Serial.printf(" [ИЗРАСХОДОВАНО СЕГОДНЯ]: %u запросов\n", used);
     }
-    Serial.println(ANSI_CYAN "----------------------------------------------------------------------" ANSI_RESET);
+    Serial.println(F("----------------------------------------------------------------------"));
     Serial.printf(" [ТОКЕНЫ СЕГОДНЯ]     : Всего: %u (Запрос: %u, Ответ: %u)\n", 
                   _stats.totalTokensToday, _stats.promptTokensToday, _stats.responseTokensToday);
     Serial.printf(" [ЗА ВСЕ ВРЕМЯ]       : Всего запросов: %u | Всего токенов: %llu\n", 
                   _stats.lifetimeRequests, _stats.lifetimeTokens);
     Serial.printf(" [СБРОС СУТОК ЧЕРЕЗ]  : %s\n", getTimeUntilMidnight().c_str());
-    Serial.println(ANSI_CYAN "----------------------------------------------------------------------" ANSI_RESET);
-    Serial.println(ANSI_YELLOW " Команды управления квотой:" ANSI_RESET);
-    Serial.println("  • set limit <число>   - изменить суточный лимит (напр. 'set limit 1500', 0 = выкл)");
-    Serial.println("  • reset quota         - сбросить счетчики сегодняшнего дня");
-    Serial.println("  • reset allquota      - сбросить всю статистику (включая общую за все время)");
-    Serial.println(ANSI_CYAN "======================================================================\n" ANSI_RESET);
+    Serial.println(F("----------------------------------------------------------------------"));
+    Serial.println(F(" Команды управления квотой:"));
+    Serial.println(F("  • set limit <число>   - изменить суточный лимит (напр. 'set limit 1500', 0 = выкл)"));
+    Serial.println(F("  • reset quota         - сбросить счетчики сегодняшнего дня"));
+    Serial.println(F("  • reset allquota      - сбросить всю статистику (включая общую за все время)"));
+    Serial.println(F("======================================================================\n"));
 }

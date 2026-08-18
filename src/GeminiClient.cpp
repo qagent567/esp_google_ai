@@ -56,8 +56,11 @@ String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
     String cleanModel = cfg.model; cleanModel.trim();
     String cleanKey = cfg.apiKey; cleanKey.trim();
-    String url = String(GEMINI_API_HOST) + cleanModel + ":generateContent?key=" + cleanKey;
-    return url;
+    
+    char urlBuf[256];
+    snprintf(urlBuf, sizeof(urlBuf), "%s%s:generateContent?key=%s", 
+             GEMINI_API_HOST, cleanModel.c_str(), cleanKey.c_str());
+    return String(urlBuf);
 }
 
 String GeminiClient::buildRequestBody(const String& prompt) const {
@@ -122,8 +125,10 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         err = deserializeJson(doc, jsonPayload);
         if (err) {
             response.success = false;
-            response.text = String("Ошибка парсинга ответа: ") + err.c_str() + 
-                            "\nСырой ответ сервера: " + jsonPayload.substring(0, 250);
+            char errBuf[300];
+            snprintf(errBuf, sizeof(errBuf), "Ошибка парсинга ответа: %s\nСырой ответ сервера: %.200s", 
+                     err.c_str(), jsonPayload.c_str());
+            response.text = String(errBuf);
             return false;
         }
     }
@@ -134,7 +139,9 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         const char* errMsg = doc["error"]["message"] | "Неизвестная ошибка API";
         const char* errStatus = doc["error"]["status"] | "ERROR";
         int errCode = doc["error"]["code"] | 0;
-        response.text = String("[Google API: ") + errStatus + " (" + String(errCode) + ")] " + errMsg;
+        char errBuf[256];
+        snprintf(errBuf, sizeof(errBuf), "[Google API: %s (%d)] %s", errStatus, errCode, errMsg);
+        response.text = String(errBuf);
         return false;
     }
 
@@ -157,22 +164,23 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         const char* finishReason = cand["finishReason"];
         if (finishReason != nullptr) {
             response.success = false;
-            response.text = String("Генерация завершена без текста. Причина: ") + finishReason;
+            char reasonBuf[128];
+            snprintf(reasonBuf, sizeof(reasonBuf), "Генерация завершена без текста. Причина: %s", finishReason);
+            response.text = String(reasonBuf);
             return false;
         }
     }
 
     response.success = false;
-    response.text = "Не удалось извлечь текст ответа. Ответ: " + jsonPayload.substring(0, 250);
+    char noTxtBuf[300];
+    snprintf(noTxtBuf, sizeof(noTxtBuf), "Не удалось извлечь текст ответа. Ответ: %.200s", jsonPayload.c_str());
+    response.text = String(noTxtBuf);
     return false;
 }
 
 void GeminiClient::processHardwareActions(GeminiResponse& response) {
     if (!response.success || _hwController == nullptr || response.text.isEmpty()) return;
 
-    // Поиск блоков команд действий:
-    // 1) ```action {...}``` или ```json {...}``` с полем "action"
-    // 2) {"action": "..."}
     int startPos = -1;
     int endPos = -1;
 
@@ -194,7 +202,8 @@ void GeminiClient::processHardwareActions(GeminiResponse& response) {
     if (startPos >= 0 && endPos > startPos) {
         String actionJson = response.text.substring(startPos, endPos + 1);
         String actionResult = _hwController->executeActionJson(actionJson);
-        response.text += "\n\n[Выполнение на ESP32]: " + actionResult;
+        response.text += "\n\n[Выполнение на ESP32]: ";
+        response.text += actionResult;
     }
 }
 
@@ -209,7 +218,11 @@ String GeminiClient::getHttpErrorDescription(int httpCode) {
         case 503: return "Сервис Google AI временно недоступен";
         case -1:  return "Ошибка соединения / таймаут (Connection Failed / Timeout)";
         case -2:  return "Не удалось отправить запрос";
-        default:  return String("HTTP Код: ") + String(httpCode);
+        default: {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "HTTP Код: %d", httpCode);
+            return String(buf);
+        }
     }
 }
 
@@ -274,9 +287,12 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
             } else {
                 parseResponse(payload, result);
                 if (result.text.isEmpty() || result.text.startsWith("Не удалось извлечь")) {
-                    result.text = String("Ошибка HTTP ") + String(httpResponseCode) + ": " + getHttpErrorDescription(httpResponseCode);
+                    char errHdr[128];
+                    snprintf(errHdr, sizeof(errHdr), "Ошибка HTTP %d: %s", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
+                    result.text = errHdr;
                     if (!payload.isEmpty()) {
-                        result.text += "\nОтвет Google: " + payload.substring(0, 300);
+                        result.text += "\nОтвет Google: ";
+                        result.text += payload.substring(0, 300);
                     }
                 }
                 http.end();
@@ -288,8 +304,10 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
                 delay(1500);
                 continue;
             }
-            result.text = String("Ошибка отправки HTTPS запроса: ") + http.errorToString(httpResponseCode) + 
-                          " (" + getHttpErrorDescription(httpResponseCode) + ")";
+            char reqErr[200];
+            snprintf(reqErr, sizeof(reqErr), "Ошибка отправки HTTPS запроса: %s (%s)", 
+                     http.errorToString(httpResponseCode).c_str(), getHttpErrorDescription(httpResponseCode).c_str());
+            result.text = reqErr;
             http.end();
             return result;
         }
@@ -300,27 +318,25 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
 
 static String formatTokensShort(uint32_t tokens) {
     if (tokens == 0) return "-";
+    char buf[16];
     if (tokens >= 1000000) {
         if (tokens % 1000000 == 0) {
-            return String(tokens / 1000000) + "M";
+            snprintf(buf, sizeof(buf), "%uM", tokens / 1000000);
         } else {
-            float m = tokens / 1000000.0f;
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%.1fM", m);
-            return String(buf);
+            snprintf(buf, sizeof(buf), "%.1fM", tokens / 1000000.0f);
         }
+        return String(buf);
     }
     if (tokens >= 1000) {
         if (tokens % 1000 == 0) {
-            return String(tokens / 1000) + "K";
+            snprintf(buf, sizeof(buf), "%uK", tokens / 1000);
         } else {
-            float k = tokens / 1000.0f;
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%.1fK", k);
-            return String(buf);
+            snprintf(buf, sizeof(buf), "%.1fK", tokens / 1000.0f);
         }
+        return String(buf);
     }
-    return String(tokens);
+    snprintf(buf, sizeof(buf), "%u", tokens);
+    return String(buf);
 }
 
 static size_t utf8VisualLength(const String& str) {

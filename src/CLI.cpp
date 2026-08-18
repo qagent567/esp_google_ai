@@ -67,7 +67,7 @@ void SerialCLI::clearScreen() {
 }
 
 void SerialCLI::printHelp() {
-    Serial.println("\n--- СПИСОК ДОСТУПНЫХ КОМАНД ---");
+    Serial.println(F("\n--- СПИСОК ДОСТУПНЫХ КОМАНД ---"));
     
     String currentCategory = "";
     for (const auto& cmd : _commands) {
@@ -78,17 +78,17 @@ void SerialCLI::printHelp() {
         Serial.printf("   %-24s - %s\n", cmd.name.c_str(), cmd.description.c_str());
     }
     
-    Serial.println("\n Отправка запросов в AI и управление платой:");
-    Serial.println("   ask <вопрос/команда>     - Отправить запрос к Gemini (поддерживает управление GPIO)");
-    Serial.println("   <любой текст>            - Нераспознанный текст автоматически отправляется в Gemini");
-    Serial.println("--------------------------------\n");
+    Serial.println(F("\n Отправка запросов в AI и управление платой:"));
+    Serial.println(F("   ask <вопрос/команда>     - Отправить запрос к Gemini (поддерживает управление GPIO)"));
+    Serial.println(F("   <любой текст>            - Нераспознанный текст автоматически отправляется в Gemini"));
+    Serial.println(F("--------------------------------\n"));
 }
 
 void SerialCLI::printStatus() {
     const AppConfig& cfg = _configMgr.getConfig();
     DeviceTelemetry tel = _hwController.getTelemetry();
 
-    Serial.println("\n================ ТЕКУЩИЙ СТАТУС УСТРОЙСТВА ================");
+    Serial.println(F("\n================ ТЕКУЩИЙ СТАТУС УСТРОЙСТВА ================"));
     Serial.printf(" [СЕТЬ] Wi-Fi SSID       : %s\n", cfg.wifiSsid.isEmpty() ? "[Не задан]" : cfg.wifiSsid.c_str());
     Serial.printf(" [СЕТЬ] Пароль           : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
     Serial.printf(" [СЕТЬ] Статус           : %s\n", _netMgr.isConnected() ? "ПОДКЛЮЧЕНО" : "ОТКЛЮЧЕНО");
@@ -96,7 +96,7 @@ void SerialCLI::printStatus() {
     Serial.printf(" [СЕТЬ] Уровень сигнала  : %d dBm\n", _netMgr.getRSSI());
     Serial.printf(" [DNS]  Smart DNS 1      : %s (Активный: %s)\n", cfg.dnsPrimary.c_str(), _netMgr.getPrimaryDNS().c_str());
     Serial.printf(" [DNS]  Smart DNS 2      : %s (Активный: %s)\n", cfg.dnsSecondary.c_str(), _netMgr.getSecondaryDNS().c_str());
-    Serial.println("-----------------------------------------------------------");
+    Serial.println(F("-----------------------------------------------------------"));
     Serial.printf(" [AI]   Модель Gemini    : %s\n", cfg.model.c_str());
     Serial.printf(" [AI]   API-Ключ         : %s\n", maskString(cfg.apiKey, 6, 4).c_str());
     Serial.printf(" [AI]   Системный промпт : %s\n", cfg.systemPrompt.c_str());
@@ -115,20 +115,20 @@ void SerialCLI::printStatus() {
     Serial.printf(" [AI]   Сброс суток      : %s (время платы: %s, UTC%+d)\n", 
                   _usageTracker.getTimeUntilMidnight().c_str(), _usageTracker.getCurrentTimeString().c_str(), cfg.timezone);
 
-    Serial.println("-----------------------------------------------------------");
+    Serial.println(F("-----------------------------------------------------------"));
     Serial.printf(" [ЖЕЛЕЗО] Температура чипа : %.1f °C\n", tel.chipTempC);
     Serial.printf(" [ЖЕЛЕЗО] Частота CPU      : %u МГц (Flash: %u МБ)\n", tel.cpuFreqMHz, tel.flashSizeBytes / (1024 * 1024));
     Serial.printf(" [СИСТЕМА] Свободно RAM    : %u байт (Мин: %u байт)\n", tel.freeHeapBytes, tel.minFreeHeapBytes);
     Serial.printf(" [СИСТЕМА] Аптайм платы    : %lu сек\n", tel.uptimeSec);
-    Serial.println("-----------------------------------------------------------");
-    Serial.println(" Команды быстрого доступа:");
-    Serial.println("  • quota / usage          - отчет о суточных лимитах и расходе токенов");
-    Serial.println("  • telemetry / sensors    - показания температуры чипа и памяти");
-    Serial.println("  • gpio <read|write|...>  - прямое управление пинами ESP32");
-    Serial.println("  • models / model [№|id]  - список и выбор модели Gemini");
-    Serial.println("  • set <limit|key|tz|...> - изменить параметры конфигурации");
-    Serial.println("  • setup <wifi|ai|model>  - интерактивный мастер настройки");
-    Serial.println("===========================================================\n");
+    Serial.println(F("-----------------------------------------------------------"));
+    Serial.println(F(" Команды быстрого доступа:"));
+    Serial.println(F("  • quota / usage          - отчет о суточных лимитах и расходе токенов"));
+    Serial.println(F("  • telemetry / sensors    - показания температуры чипа и памяти"));
+    Serial.println(F("  • gpio <read|write|...>  - прямое управление пинами ESP32"));
+    Serial.println(F("  • models / model [№|id]  - список и выбор модели Gemini"));
+    Serial.println(F("  • set <limit|key|tz|...> - изменить параметры конфигурации"));
+    Serial.println(F("  • setup <wifi|ai|model>  - интерактивный мастер настройки"));
+    Serial.println(F("===========================================================\n"));
 }
 
 void SerialCLI::startWizard(WizardType type) {

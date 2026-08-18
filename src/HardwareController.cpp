@@ -103,7 +103,11 @@ String HardwareController::getTelemetrySummary() {
 
 String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
     Wire.begin(sda, scl);
-    String result = "Сканирование шины I2C (SDA=" + String(sda) + ", SCL=" + String(scl) + "):\n";
+    char buf[128];
+    snprintf(buf, sizeof(buf), "Сканирование шины I2C (SDA=%u, SCL=%u):\n", sda, scl);
+    String result;
+    result.reserve(256);
+    result = buf;
     int nDevices = 0;
 
     for (uint8_t address = 1; address < 127; address++) {
@@ -111,9 +115,9 @@ String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
         uint8_t error = Wire.endTransmission();
 
         if (error == 0) {
-            char hexBuf[16];
-            snprintf(hexBuf, sizeof(hexBuf), "0x%02X", address);
-            result += " - Найдено устройство по адресу " + String(hexBuf) + "\n";
+            char hexBuf[48];
+            snprintf(hexBuf, sizeof(hexBuf), " - Найдено устройство по адресу 0x%02X\n", address);
+            result += hexBuf;
             nDevices++;
         }
     }
@@ -121,7 +125,8 @@ String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
     if (nDevices == 0) {
         result += " Устройства I2C не обнаружены.";
     } else {
-        result += " Всего обнаружено устройств: " + String(nDevices);
+        snprintf(buf, sizeof(buf), " Всего обнаружено устройств: %d", nDevices);
+        result += buf;
     }
     return result;
 }
@@ -146,40 +151,56 @@ String HardwareController::getHardwareCapabilitiesDescription() {
 String HardwareController::executeActionJson(const String& jsonAction) {
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, jsonAction);
+    char buf[128];
     if (err) {
-        return "Ошибка разбора команды действия JSON: " + String(err.c_str());
+        snprintf(buf, sizeof(buf), "Ошибка разбора команды действия JSON: %s", err.c_str());
+        return String(buf);
     }
 
     const char* action = doc["action"] | "";
     if (strcmp(action, "set_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
         uint8_t val = doc["value"] | 0;
-        if (!isValidGpio(pin)) return "Ошибка: недопустимый номер GPIO " + String(pin);
+        if (!isValidGpio(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+            return String(buf);
+        }
         writePin(pin, val);
-        return "GPIO " + String(pin) + " успешно установлен в " + (val ? "HIGH (1)" : "LOW (0)");
+        snprintf(buf, sizeof(buf), "GPIO %u успешно установлен в %s", pin, val ? "HIGH (1)" : "LOW (0)");
+        return String(buf);
     }
     else if (strcmp(action, "read_pin") == 0) {
         uint8_t pin = doc["pin"] | 255;
-        if (!isValidGpio(pin)) return "Ошибка: недопустимый номер GPIO " + String(pin);
+        if (!isValidGpio(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+            return String(buf);
+        }
         setPinMode(pin, INPUT);
         int val = readPin(pin);
-        return "Значение на цифровом GPIO " + String(pin) + ": " + String(val);
+        snprintf(buf, sizeof(buf), "Значение на цифровом GPIO %u: %d", pin, val);
+        return String(buf);
     }
     else if (strcmp(action, "read_analog") == 0) {
         uint8_t pin = doc["pin"] | 255;
         int val = readAnalogPin(pin);
-        if (val < 0) return "Ошибка чтения аналогового входа на GPIO " + String(pin);
+        if (val < 0) {
+            snprintf(buf, sizeof(buf), "Ошибка чтения аналогового входа на GPIO %u", pin);
+            return String(buf);
+        }
         float voltage = (val / 4095.0f) * 3.3f;
-        char buf[64];
         snprintf(buf, sizeof(buf), "ADC GPIO %u: %d (%.2f В)", pin, val, voltage);
         return String(buf);
     }
     else if (strcmp(action, "toggle_pin") == 0) {
         uint8_t pin = doc["pin"] | 2;
-        if (!isValidGpio(pin)) return "Ошибка: недопустимый номер GPIO " + String(pin);
+        if (!isValidGpio(pin)) {
+            snprintf(buf, sizeof(buf), "Ошибка: недопустимый номер GPIO %u", pin);
+            return String(buf);
+        }
         togglePin(pin);
         int current = readPin(pin);
-        return "Состояние GPIO " + String(pin) + " переключено. Текущий уровень: " + String(current);
+        snprintf(buf, sizeof(buf), "Состояние GPIO %u переключено. Текущий уровень: %d", pin, current);
+        return String(buf);
     }
     else if (strcmp(action, "get_telemetry") == 0) {
         return getTelemetrySummary();
@@ -194,5 +215,6 @@ String HardwareController::executeActionJson(const String& jsonAction) {
         return "Перезагрузка ESP32...";
     }
 
-    return "Неизвестное действие: " + String(action);
+    snprintf(buf, sizeof(buf), "Неизвестное действие: %s", action);
+    return String(buf);
 }
