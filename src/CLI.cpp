@@ -25,7 +25,7 @@ void SerialCLI::printWelcome() {
 }
 
 void SerialCLI::printPrompt() {
-    if (_inWizardMode) {
+    if (_currentWizard != WizardType::NONE) {
         Serial.print(F("[WIZARD] > "));
     } else {
         Serial.print(F("ESP32-AI> "));
@@ -67,9 +67,12 @@ void SerialCLI::printHelp() {
     Serial.println(F("   ask <вопрос>             - Отправить текстовый запрос в Gemini"));
     Serial.println(F("   <любой текст>            - Если просто ввести текст, он отправится в Gemini"));
     Serial.println(F("   test                     - Тестовый пинг-запрос к Gemini API"));
+    Serial.println(F("   demo automation          - Демонстрация использования AI в коде (сенсоры)"));
     Serial.println(F("   status                   - Показать текущее состояние и настройки"));
+    Serial.println(F("   setup wifi               - Интерактивная настройка Wi-Fi"));
+    Serial.println(F("   setup ai                 - Интерактивная настройка параметров нейросети"));
+    Serial.println(F("   wizard                   - Полный пошаговый мастер первой настройки"));
     Serial.println(F("   save                     - Сохранить все параметры во Flash (NVS)"));
-    Serial.println(F("   wizard                   - Пошаговый мастер первоначальной настройки"));
     Serial.println(F("   reset                    - Сбросить все настройки на значения по умолчанию"));
     Serial.println(F("   reboot                   - Перезагрузить микроконтроллер ESP32"));
     Serial.println(F("   help / ?                 - Показать это меню помощи"));
@@ -100,50 +103,87 @@ void SerialCLI::printStatus() {
     Serial.println(F("================================================\n"));
 }
 
-void SerialCLI::startWizard() {
-    _inWizardMode = true;
+void SerialCLI::startWizard(WizardType type) {
+    _currentWizard = type;
     _wizardStep = 1;
     Serial.println(F("\n========================================================"));
-    Serial.println(F("           МАСТЕР ПЕРВОНАЧАЛЬНОЙ НАСТРОЙКИ             "));
-    Serial.println(F("========================================================"));
-    Serial.println(F("Для отмены введите 'cancel' в любой момент."));
-    Serial.println(F("ШАГ 1/3: Введите SSID (имя) вашей Wi-Fi сети:"));
+    
+    if (type == WizardType::FULL) {
+        Serial.println(F("           МАСТЕР ПОЛНОЙ НАСТРОЙКИ             "));
+        Serial.println(F("========================================================"));
+        Serial.println(F("Для отмены введите 'cancel' в любой момент."));
+        Serial.println(F("ШАГ 1/3: Введите SSID (имя) вашей Wi-Fi сети:"));
+    } else if (type == WizardType::WIFI) {
+        Serial.println(F("           НАСТРОЙКА WI-FI             "));
+        Serial.println(F("========================================================"));
+        Serial.println(F("Для отмены введите 'cancel' в любой момент."));
+        Serial.println(F("ШАГ 1/2: Введите SSID (имя) вашей Wi-Fi сети:"));
+    } else if (type == WizardType::AI) {
+        Serial.println(F("           НАСТРОЙКА GOOGLE AI (GEMINI)             "));
+        Serial.println(F("========================================================"));
+        Serial.println(F("Для отмены введите 'cancel' в любой момент."));
+        Serial.println(F("ШАГ 1/2: Введите API-ключ Google AI Studio (Gemini API Key):"));
+        Serial.println(F("(Получить ключ бесплатно можно на https://aistudio.google.com/app/apikey)"));
+    }
 }
 
 void SerialCLI::handleWizardStep(const String& input) {
     if (input.equalsIgnoreCase("cancel")) {
-        _inWizardMode = false;
+        _currentWizard = WizardType::NONE;
         _wizardStep = 0;
         Serial.println(F("[WIZARD] Настройка отменена."));
         return;
     }
 
-    if (_wizardStep == 1) {
-        if (input.isEmpty()) {
-            Serial.println(F("[WIZARD] SSID не может быть пустым. Введите SSID сети:"));
-            return;
+    if (_currentWizard == WizardType::FULL) {
+        if (_wizardStep == 1) {
+            if (input.isEmpty()) { Serial.println(F("[WIZARD] SSID не может быть пустым. Введите SSID сети:")); return; }
+            _configMgr.getConfig().wifiSsid = input;
+            _wizardStep = 2;
+            Serial.println(F("ШАГ 2/3: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):"));
+        } else if (_wizardStep == 2) {
+            _configMgr.getConfig().wifiPassword = input;
+            _wizardStep = 3;
+            Serial.println(F("ШАГ 3/3: Введите API-ключ Google AI Studio (Gemini API Key):"));
+        } else if (_wizardStep == 3) {
+            if (input.isEmpty()) { Serial.println(F("[WIZARD] API-ключ не может быть пустым. Введите API-ключ:")); return; }
+            _configMgr.getConfig().apiKey = input;
+            _configMgr.save();
+            _currentWizard = WizardType::NONE;
+            _wizardStep = 0;
+            Serial.println(F("\n[WIZARD] Все параметры успешно настроены и сохранены во Flash!"));
+            _netMgr.connect();
         }
-        _configMgr.getConfig().wifiSsid = input;
-        _wizardStep = 2;
-        Serial.println(F("ШАГ 2/3: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):"));
-    } else if (_wizardStep == 2) {
-        _configMgr.getConfig().wifiPassword = input;
-        _wizardStep = 3;
-        Serial.println(F("ШАГ 3/3: Введите API-ключ Google AI Studio (Gemini API Key):"));
-        Serial.println(F("(Получить ключ бесплатно можно на https://aistudio.google.com/app/apikey)"));
-    } else if (_wizardStep == 3) {
-        if (input.isEmpty()) {
-            Serial.println(F("[WIZARD] API-ключ не может быть пустым. Введите API-ключ:"));
-            return;
+    } else if (_currentWizard == WizardType::WIFI) {
+        if (_wizardStep == 1) {
+            if (input.isEmpty()) { Serial.println(F("[WIZARD] SSID не может быть пустым. Введите SSID сети:")); return; }
+            _configMgr.getConfig().wifiSsid = input;
+            _wizardStep = 2;
+            Serial.println(F("ШАГ 2/2: Введите пароль от Wi-Fi сети (или нажмите Enter, если сеть открытая):"));
+        } else if (_wizardStep == 2) {
+            _configMgr.getConfig().wifiPassword = input;
+            _configMgr.save();
+            _currentWizard = WizardType::NONE;
+            _wizardStep = 0;
+            Serial.println(F("\n[WIZARD] Настройки Wi-Fi успешно сохранены!"));
+            _netMgr.connect();
         }
-        _configMgr.getConfig().apiKey = input;
-        _configMgr.save();
-        _inWizardMode = false;
-        _wizardStep = 0;
-
-        Serial.println(F("\n[WIZARD] Все параметры успешно настроены и сохранены во Flash!"));
-        Serial.println(F("[WIZARD] Запуск подключения к сети..."));
-        _netMgr.connect();
+    } else if (_currentWizard == WizardType::AI) {
+        if (_wizardStep == 1) {
+            if (input.isEmpty()) { Serial.println(F("[WIZARD] API-ключ не может быть пустым. Введите API-ключ:")); return; }
+            _configMgr.getConfig().apiKey = input;
+            _wizardStep = 2;
+            Serial.println(F("ШАГ 2/2: Введите системный промпт (или нажмите Enter для текущего):"));
+            Serial.printf("Текущий промпт: %s\n", _configMgr.getConfig().systemPrompt.c_str());
+        } else if (_wizardStep == 2) {
+            if (!input.isEmpty()) {
+                _configMgr.getConfig().systemPrompt = input;
+            }
+            _configMgr.save();
+            _currentWizard = WizardType::NONE;
+            _wizardStep = 0;
+            Serial.println(F("\n[WIZARD] Настройки AI успешно сохранены!"));
+        }
     }
 }
 
@@ -152,7 +192,7 @@ void SerialCLI::handleCommand(String line) {
     if (line.isEmpty()) return;
 
     // Режим мастера настройки
-    if (_inWizardMode) {
+    if (_currentWizard != WizardType::NONE) {
         handleWizardStep(line);
         return;
     }
@@ -165,8 +205,12 @@ void SerialCLI::handleCommand(String line) {
         printHelp();
     } else if (lower == "status" || lower == "info") {
         printStatus();
+    } else if (lower == "setup wifi") {
+        startWizard(WizardType::WIFI);
+    } else if (lower == "setup ai") {
+        startWizard(WizardType::AI);
     } else if (lower == "wizard") {
-        startWizard();
+        startWizard(WizardType::FULL);
     } else if (lower == "scan") {
         _netMgr.scanNetworks();
     } else if (lower == "connect") {
@@ -185,6 +229,26 @@ void SerialCLI::handleCommand(String line) {
         ESP.restart();
     } else if (lower == "test") {
         _geminiClient.testConnection();
+    } else if (lower == "demo automation") {
+        Serial.println(F("[DEMO] Демонстрация работы AI в программном коде ESP32..."));
+        Serial.println(F("[DEMO] Имитация чтения датчика (Температура: 35.5 C)..."));
+        float fakeTemp = 35.5;
+        
+        // Формируем программный запрос
+        String prompt = "Температура в серверной сейчас " + String(fakeTemp) + " градусов Цельсия. Норма до 25. Что мне сделать? Ответь очень кратко, словно ты аварийная система ESP32.";
+        
+        Serial.println(F("[DEMO] Отправляем системный промпт к Gemini:"));
+        Serial.println(prompt);
+        
+        GeminiResponse res = _geminiClient.ask(prompt);
+        if (res.success) {
+            Serial.println(F("\n[РЕАКЦИЯ СИСТЕМЫ на основе ответа AI]:"));
+            Serial.println(res.text);
+            Serial.println(F("\n(Так вы можете использовать _geminiClient.ask() в любом месте кода!)"));
+        } else {
+            Serial.print(F("[ОШИБКА] Не удалось получить ответ: "));
+            Serial.println(res.text);
+        }
     } else if (lower.startsWith("set ssid ")) {
         String val = line.substring(9);
         val.trim();

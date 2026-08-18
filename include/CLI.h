@@ -10,6 +10,13 @@
  */
 class SerialCLI {
 public:
+    enum class WizardType {
+        NONE,
+        FULL,
+        WIFI,
+        AI
+    };
+
     SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient);
 
     // Инициализация CLI
@@ -27,8 +34,8 @@ public:
     // Вывод подробного статуса устройства
     void printStatus();
 
-    // Пошаговый мастер первой настройки
-    void startWizard();
+    // Запуск мастера настройки (FULL, WIFI или AI)
+    void startWizard(WizardType type = WizardType::FULL);
 
 private:
     ConfigManager& _configMgr;
@@ -36,7 +43,7 @@ private:
     GeminiClient& _geminiClient;
 
     String _inputBuffer;
-    bool _inWizardMode = false;
+    WizardType _currentWizard = WizardType::NONE;
     int _wizardStep = 0;
 
     // Выполнение введенной команды
