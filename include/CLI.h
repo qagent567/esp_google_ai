@@ -5,6 +5,9 @@
 #include "NetworkManager.h"
 #include "GeminiClient.h"
 
+#include <vector>
+#include <functional>
+
 /**
  * @brief Класс интерактивного интерфейса командной строки (Serial CLI)
  */
@@ -47,8 +50,31 @@ private:
     WizardType _currentWizard = WizardType::NONE;
     int _wizardStep = 0;
 
+    // --- Обработка VT100 и истории ---
+    std::vector<String> _history;
+    int _historyIndex = -1;
+    bool _inEscapeSequence = false;
+    String _escapeBuffer = "";
+    int _cursorPos = 0;
+
+    // --- Реестр команд ---
+    struct Command {
+        String name;
+        String description;
+        std::function<void(int argc, String argv[])> handler;
+        String category;
+    };
+    std::vector<Command> _commands;
+
+    // Регистрация всех команд
+    void registerCommands();
+    void addCommand(const String& name, const String& desc, const String& category, std::function<void(int argc, String argv[])> handler);
+
     // Выполнение введенной команды
     void handleCommand(String line);
+    
+    // Парсер аргументов
+    int parseArgs(String line, String argv[], int maxArgs);
 
     // Обработка шагов мастера настройки
     void handleWizardStep(const String& input);
@@ -56,4 +82,7 @@ private:
     // Вспомогательные функции
     void printPrompt();
     String maskString(const String& str, int keepStart = 4, int keepEnd = 4);
+    
+    // Цветовые макросы и утилиты
+    void clearScreen();
 };

@@ -42,9 +42,13 @@ public:
     String getPrimaryDNS() const;
     String getSecondaryDNS() const;
 
+    // Включение/отключение авто-переподключения
+    void setAutoReconnect(bool enable);
+
 private:
     ConfigManager& _configMgr;
     unsigned long _lastReconnectAttempt = 0;
     const unsigned long RECONNECT_INTERVAL_MS = 10000; // Попытка переподключения каждые 10 секунд
     bool _wasConnected = false;
+    bool _autoReconnectEnabled = true;
 };

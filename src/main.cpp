@@ -20,7 +20,18 @@ SerialCLI serialCli(configManager, networkManager, geminiClient);
 void setup() {
     // Инициализация Serial интерфейса на скорости 115200 бод
     Serial.begin(115200);
-    delay(500);
+    
+    // Ждем до 2.5 секунд, чтобы дать пользователю возможность открыть монитор порта,
+    // либо продолжаем немедленно, если монитор порта был запущен и пользователь нажал клавишу
+    unsigned long startWait = millis();
+    while (millis() - startWait < 2500) {
+        if (Serial.available()) {
+            break;
+        }
+        delay(10);
+    }
+    // Очистить буфер ввода
+    while(Serial.available()) Serial.read();
 
     Serial.println();
     Serial.println(F("[СИСТЕМА] Запуск прошивки ESP32 Google AI Studio..."));

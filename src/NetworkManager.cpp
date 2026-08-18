@@ -1,4 +1,5 @@
 #include "NetworkManager.h"
+#include <esp_wifi.h>
 #include <lwip/dns.h>
 #include <lwip/ip_addr.h>
 
@@ -7,76 +8,83 @@ NetworkManager::NetworkManager(ConfigManager& configMgr)
 
 void NetworkManager::begin() {
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
+    WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+}
+
+void NetworkManager::setAutoReconnect(bool enable) {
+    _autoReconnectEnabled = enable;
 }
 
 void NetworkManager::applyCustomDNS() {
     const AppConfig& cfg = _configMgr.getConfig();
     if (cfg.dnsPrimary.isEmpty()) return;
 
-    IPAddress primaryIP, secondaryIP;
-    bool pOk = primaryIP.fromString(cfg.dnsPrimary);
-    bool sOk = secondaryIP.fromString(cfg.dnsSecondary);
-
-    if (pOk) {
-        // Установка через Arduino API (DHCP для IP, кастомные DNS)
-        if (sOk) {
-            WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, primaryIP, secondaryIP);
-        } else {
-            WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, primaryIP);
-        }
-
-        // Прямая установка через lwIP стек для 100% гарантии маршрутизации
-        ip_addr_t d1, d2;
-        ipaddr_aton(cfg.dnsPrimary.c_str(), &d1);
+    ip_addr_t d1, d2;
+    if (ipaddr_aton(cfg.dnsPrimary.c_str(), &d1)) {
         dns_setserver(0, &d1);
-
-        if (sOk) {
-            ipaddr_aton(cfg.dnsSecondary.c_str(), &d2);
+        if (!cfg.dnsSecondary.isEmpty() && ipaddr_aton(cfg.dnsSecondary.c_str(), &d2)) {
             dns_setserver(1, &d2);
         }
-
         Serial.printf("[DNS] Применены Smart DNS серверы: %s, %s\n", 
                       cfg.dnsPrimary.c_str(), 
-                      sOk ? cfg.dnsSecondary.c_str() : "нет");
+                      cfg.dnsSecondary.isEmpty() ? "нет" : cfg.dnsSecondary.c_str());
     } else {
         Serial.printf("[DNS] Ошибка: Неверный формат DNS IP: %s\n", cfg.dnsPrimary.c_str());
     }
 }
 
 bool NetworkManager::connect() {
+    _autoReconnectEnabled = true;
+
     const AppConfig& cfg = _configMgr.getConfig();
     if (cfg.wifiSsid.isEmpty()) {
         Serial.println(F("[Wi-Fi] SSID не задан! Введите команду 'set ssid <ваша_сеть>'"));
         return false;
     }
 
-    Serial.printf("[Wi-Fi] Подключение к сети: '%s'...\n", cfg.wifiSsid.c_str());
+    String ssid = cfg.wifiSsid;
+    String pass = cfg.wifiPassword;
+    ssid.replace("\r", ""); ssid.replace("\n", "");
+    pass.replace("\r", ""); pass.replace("\n", "");
+
+    Serial.printf("[Wi-Fi] Подключение к сети: '%s'...\n", ssid.c_str());
     Serial.println(F("[Wi-Fi] Нажмите 'e' для отмены поиска и подключения."));
-    
-    // Сброс предыдущего подключения
-    WiFi.disconnect(true);
-    delay(100);
+
+    // Сброс и перезапуск Wi-Fi
+    WiFi.disconnect(true, true);
+    delay(200);
+
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 
-    // Применяем Smart DNS
-    applyCustomDNS();
-
-    if (cfg.wifiPassword.isEmpty()) {
-        WiFi.begin(cfg.wifiSsid.c_str());
-    } else {
-        WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPassword.c_str());
+    wifi_config_t wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config));
+    strncpy((char*)wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
+    if (!pass.isEmpty()) {
+        strncpy((char*)wifi_config.sta.password, pass.c_str(), sizeof(wifi_config.sta.password) - 1);
     }
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    // Поддержка PMF (Protected Management Frames) для совместимости с Windows Hotspot и современными роутерами
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    esp_wifi_start();
+    esp_wifi_connect();
 
     // Ожидание подключения с таймаутом (до 15 секунд) или отмена по нажатию 'e'
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-        // Проверка нажатия клавиши 'e' в терминале для остановки поиска
         if (Serial.available()) {
             char c = (char)Serial.read();
             if (c == 'e' || c == 'E') {
                 WiFi.disconnect(true);
                 Serial.println(F("\n[Wi-Fi] Поиск сети остановлен пользователем (нажата клавиша 'e')."));
+                _autoReconnectEnabled = false;
                 return false;
             }
         }
@@ -87,7 +95,7 @@ bool NetworkManager::connect() {
 
     if (WiFi.status() == WL_CONNECTED) {
         _wasConnected = true;
-        // Повторно закрепляем DNS после получения адреса от DHCP роутера
+        // Применяем Smart DNS после получения сетевых настроек от DHCP
         applyCustomDNS();
         
         Serial.println(F("[Wi-Fi] Успешно подключено!"));
@@ -105,6 +113,7 @@ bool NetworkManager::connect() {
 void NetworkManager::disconnect() {
     WiFi.disconnect();
     _wasConnected = false;
+    _autoReconnectEnabled = false;
     Serial.println(F("[Wi-Fi] Отключено от сети."));
 }
 
@@ -123,7 +132,7 @@ void NetworkManager::update() {
     }
 
     // Авто-переподключение, если сеть настроена, но связь пропала
-    if (!connectedNow && !_configMgr.getConfig().wifiSsid.isEmpty()) {
+    if (_autoReconnectEnabled && !connectedNow && !_configMgr.getConfig().wifiSsid.isEmpty()) {
         if (millis() - _lastReconnectAttempt >= RECONNECT_INTERVAL_MS) {
             _lastReconnectAttempt = millis();
             Serial.println(F("[Wi-Fi] Попытка авто-переподключения к сети..."));
