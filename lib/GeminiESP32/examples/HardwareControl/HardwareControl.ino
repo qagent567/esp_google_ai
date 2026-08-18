@@ -1,48 +1,177 @@
+/*
+ * =============================================================================
+ *  GeminiESP32 — Пример 2: Физическое управление железом через ИИ (HardwareControl)
+ * =============================================================================
+ *  Демонстрирует двустороннее взаимодействие ИИ с реальным железом ESP32.
+ *  ИИ может:
+ *    - Включать/выключать GPIO (реле, светодиоды, транзисторные ключи)
+ *    - Измерять напряжение на аналоговых входах (ADC1: GPIO 32-39)
+ *    - Читать состояние цифровых входов (кнопки, датчики)
+ *    - Сканировать шину I2C для обнаружения подключенных датчиков
+ *    - Считывать внутреннюю телеметрию кристалла (температура, RAM, аптайм)
+ *
+ *  ВАЖНО: Белый список пинов (setAllowedPins) защищает ВАШИ пины
+ *         (SD-карта, SPI-дисплей, UART датчики и т.д.) от случайного
+ *         вмешательства ИИ. Укажите ТОЛЬКО те пины, которыми ИИ может управлять.
+ *
+ *  Схема подключения для этого примера:
+ *    GPIO 2  → Встроенный синий светодиод (есть на большинстве плат DevKit)
+ *    GPIO 4  → Внешний светодиод (через резистор 220 Ом на GND)
+ *    GPIO 34 → Потенциометр или любой аналоговый датчик (0-3.3 В)
+ *    GPIO 21 → SDA (шина I2C для датчиков типа BMP280, SHT21, OLED)
+ *    GPIO 22 → SCL (шина I2C)
+ *
+ *  Плата:    ESP32 DevKit
+ *  Частота:  115200 baud
+ * =============================================================================
+ */
+
 #include <WiFi.h>
 #include <GeminiESP32.h>
 
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-const char* geminiApiKey = "YOUR_GEMINI_API_KEY";
+// ─── НАСТРОЙКИ ────────────────────────────────────────────────────────────────
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* GEMINI_API_KEY = "YOUR_GEMINI_API_KEY";
 
-GeminiESP32 ai(geminiApiKey, "gemini-3.5-flash-lite");
+// Пины, которые РАЗРЕШЕНО контролировать ИИ.
+// Все остальные пины платы будут полностью заблокированы для ИИ.
+// Это предотвращает конфликты с вашими собственными библиотеками!
+const std::vector<uint8_t> AI_ALLOWED_PINS = {
+    2,   // Встроенный светодиод (синий) — GPIO 2
+    4,   // Внешний светодиод / реле
+    34,  // Аналоговый вход ADC1 (только чтение, GPIO34 Input-only)
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
+GeminiESP32 ai(GEMINI_API_KEY, "gemini-3.5-flash-lite");
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n--- Пример HardwareControl (GeminiESP32) ---");
-    WiFi.begin(ssid, password);
+    Serial.println("\n╔═════════════════════════════════════════╗");
+    Serial.println("║  GeminiESP32 — HardwareControl Example  ║");
+    Serial.println("╚═════════════════════════════════════════╝\n");
+
+    // 1. Подключение к Wi-Fi
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.printf("Подключение к %s", WIFI_SSID);
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
     }
-    Serial.println("\nWi-Fi подключен! IP: " + WiFi.localIP().toString());
+    Serial.printf("\n✓ Подключено! IP: %s\n\n", WiFi.localIP().toString().c_str());
 
-    // Инициализация
-    ai.begin();
-    
-    // Включаем аппаратное управление GPIO/ADC/I2C
+    // 2. Инициализация библиотеки.
+    //    Второй параметр false = НЕ применять Smart DNS автоматически.
+    //    Используйте false, если у вас уже есть свой DNS или работаете в локальной сети.
+    //    По умолчанию true — включает Smart DNS для гарантированного доступа к Google API.
+    ai.begin(GEMINI_API_KEY, /* autoSmartDns = */ true);
+
+    // 3. Настройка безопасности пинов.
+    //    Библиотека при запуске НЕ трогает ни один пин.
+    //    ИИ сможет управлять ТОЛЬКО пинами из этого списка.
+    //    Попытка ИИ затронуть любой другой пин будет молча отклонена.
+    ai.setAllowedPins(AI_ALLOWED_PINS);
+
+    // 4. Явно включаем аппаратный мост.
+    //    По умолчанию aппаратное управление ВКЛЮЧЕНО.
+    //    Чтобы полностью отключить (только текстовые ответы): enableHardwareControl(false)
     ai.enableHardwareControl(true);
 
-    // Запрос к AI с командой включить встроенный синий светодиод на плате
-    Serial.println("\nОтправляем запрос: 'Включи синий светодиод на плате и сообщи текущую температуру процессора'");
-    GeminiResponse resp = ai.query("Включи синий светодиод на плате и сообщи текущую температуру процессора");
+    // 5. Настраиваем системный промпт для Hardware AI режима.
+    //    Можно переопределить дефолтный, если нужно ограничить действия ИИ
+    //    или добавить контекст о вашей схеме.
+    ai.setSystemPrompt(
+        "Ты — управляющий контроллер ESP32. "
+        "К тебе подключены: синий светодиод (GPIO 2), внешний светодиод (GPIO 4), "
+        "потенциометр на аналоговом входе GPIO 34. "
+        "Когда пользователь просит управлять чем-либо — немедленно выполняй команды "
+        "через action-блоки и сообщай о результате. "
+        "Перед выполнением команды объясни что именно делаешь."
+    );
 
-    Serial.println("\n[Результат]:");
-    Serial.println(resp.text);
-    Serial.printf("[Статистика]: Время: %lu мс, Токены: %d (запрос: %d, ответ: %d)\n", 
-                  resp.durationMs, resp.totalTokens, resp.promptTokens, resp.candidatesTokens);
+    // 6. Тест 1: Включить встроенный светодиод через ИИ
+    Serial.println("═══ ТЕСТ 1: Прямая аппаратная команда ═══");
+    String resp1 = ai.ask("Включи синий светодиод на плате (GPIO 2) и подтверди выполнение.");
+    Serial.println("[ИИ]: " + resp1);
+    Serial.println();
+    delay(2000);
+
+    // 7. Тест 2: Чтение аналогового датчика через ИИ
+    Serial.println("═══ ТЕСТ 2: Чтение аналогового датчика ═══");
+    String resp2 = ai.ask(
+        "Прочитай показание аналогового входа на GPIO 34 и переведи в напряжение (0-3.3 В). "
+        "Если значение близко к нулю — датчик не подключен, сообщи об этом."
+    );
+    Serial.println("[ИИ]: " + resp2);
+    Serial.println();
+    delay(2000);
+
+    // 8. Тест 3: Телеметрия чипа через ИИ
+    Serial.println("═══ ТЕСТ 3: Телеметрия кристалла ═══");
+    GeminiResponse resp3 = ai.query(
+        "Считай текущую внутреннюю телеметрию платы: температуру кристалла, "
+        "свободную RAM, время работы и уровень Wi-Fi сигнала. "
+        "Дай оценку: всё ли в норме?"
+    );
+    Serial.println("[ИИ]: " + resp3.text);
+    Serial.printf("(Время ответа: %lu мс, токенов: %d)\n\n", resp3.durationMs, resp3.totalTokens);
+    delay(2000);
+
+    // 9. Тест 4: Сканирование I2C (найдет подключенные BMP280, OLED SSD1306 и т.д.)
+    Serial.println("═══ ТЕСТ 4: Сканирование I2C шины ═══");
+    String resp4 = ai.ask(
+        "Просканируй шину I2C на пинах SDA=21 и SCL=22. "
+        "Если найдены устройства — определи по адресу что это может быть за датчик или дисплей."
+    );
+    Serial.println("[ИИ]: " + resp4);
+    Serial.println();
+
+    // 10. Прямой доступ к аппаратному контроллеру (минуя ИИ)
+    //     Используйте getHardware() для прямого управления из вашего кода
+    Serial.println("═══ ТЕСТ 5: Прямое управление из кода (без ИИ) ═══");
+    HardwareController& hw = ai.getHardware();
+    
+    hw.writePin(2, LOW);   // Выключить GPIO 2
+    delay(500);
+    hw.writePin(2, HIGH);  // Включить GPIO 2
+    delay(500);
+    hw.writePin(2, LOW);   // Выключить GPIO 2
+    
+    DeviceTelemetry tel = hw.getTelemetry();
+    Serial.printf("✓ Температура чипа: %.1f °C\n", tel.chipTempC);
+    Serial.printf("✓ Свободно RAM: %u байт\n", tel.freeHeapBytes);
+    Serial.printf("✓ Аптайм: %lu сек\n", tel.uptimeSec);
+    Serial.printf("✓ Wi-Fi RSSI: %d dBm\n", tel.wifiRssi);
+    
+    Serial.println("\n✅ Все тесты завершены. Чат через Serial Monitor активен.");
 }
 
 void loop() {
+    // Интерактивный чат через Serial Monitor.
+    // ИИ будет управлять железом на основе текстовых команд.
+    // Примеры команд:
+    //   "мигни светодиодом 3 раза"
+    //   "замерь напряжение на аналоговом входе"
+    //   "покажи температуру чипа"
+    //   "включи реле и отключи через 5 секунд"
+    
     if (Serial.available()) {
-        String prompt = Serial.readStringUntil('\n');
-        prompt.trim();
-        if (prompt.length() > 0) {
-            Serial.println("\n>>> " + prompt);
-            String answer = ai.ask(prompt);
-            Serial.println("<<< " + answer);
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        
+        if (cmd.length() == 0) return;
+        
+        Serial.printf("\n[Вы]: %s\n[ИИ]: ", cmd.c_str());
+        
+        GeminiResponse resp = ai.query(cmd);
+        
+        Serial.println(resp.text);
+        
+        if (!resp.success) {
+            Serial.printf("[!] Ошибка запроса: HTTP %d\n", resp.httpCode);
         }
     }
 }
