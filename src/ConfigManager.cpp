@@ -1,7 +1,7 @@
 #include "ConfigManager.h"
 
 // Значения по умолчанию
-static const char* DEFAULT_MODEL = "gemini-2.5-flash";
+static const char* DEFAULT_MODEL = "gemini-3.5-flash-lite";
 static const char* DEFAULT_DNS_PRIMARY = "111.88.96.50";   // xbox-dns.ru Primary IPv4
 static const char* DEFAULT_DNS_SECONDARY = "111.88.96.51"; // xbox-dns.ru Secondary IPv4
 static const char* DEFAULT_SYSTEM_PROMPT = "Ты полезный AI-ассистент на ESP32. Отвечай кратко, понятно и по делу.";

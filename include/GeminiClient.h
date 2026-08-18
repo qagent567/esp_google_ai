@@ -45,6 +45,17 @@ public:
     // Парсинг JSON ответа от Google API с оптимизацией памяти
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
 
+    // Доступ к кэшированному списку моделей
+    size_t getModelCount() const { return _cachedModels.size(); }
+    String getModelByIndex(size_t index) const {
+        if (index > 0 && index <= _cachedModels.size()) {
+            return _cachedModels[index - 1];
+        }
+        return "";
+    }
+    const std::vector<String>& getCachedModels() const { return _cachedModels; }
+
 private:
     ConfigManager& _configMgr;
+    std::vector<String> _cachedModels;
 };

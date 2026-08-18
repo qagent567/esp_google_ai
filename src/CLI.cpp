@@ -84,25 +84,35 @@ void SerialCLI::printHelp() {
 void SerialCLI::printStatus() {
     const AppConfig& cfg = _configMgr.getConfig();
 
-    Serial.println(ANSI_CYAN "\n================ ТЕКУЩИЙ СТАТУС ================" ANSI_RESET);
+    Serial.println(ANSI_CYAN "\n================ ТЕКУЩИЙ СТАТУС УСТРОЙСТВА ================" ANSI_RESET);
     Serial.printf(" [СЕТЬ] Wi-Fi SSID       : %s\n", cfg.wifiSsid.isEmpty() ? ANSI_RED "[Не задан]" ANSI_RESET : cfg.wifiSsid.c_str());
-    Serial.printf(" [СЕТЬ] Пароль (RAM)     : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
+    Serial.printf(" [СЕТЬ] Пароль           : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
     Serial.printf(" [СЕТЬ] Статус           : %s\n", _netMgr.isConnected() ? ANSI_GREEN "ПОДКЛЮЧЕНО" ANSI_RESET : ANSI_RED "ОТКЛЮЧЕНО" ANSI_RESET);
     Serial.printf(" [СЕТЬ] Локальный IP     : %s\n", _netMgr.getLocalIP().c_str());
     Serial.printf(" [СЕТЬ] Уровень сигнала  : %d dBm\n", _netMgr.getRSSI());
     Serial.printf(" [DNS]  Smart DNS 1      : %s (Активный: %s)\n", cfg.dnsPrimary.c_str(), _netMgr.getPrimaryDNS().c_str());
     Serial.printf(" [DNS]  Smart DNS 2      : %s (Активный: %s)\n", cfg.dnsSecondary.c_str(), _netMgr.getSecondaryDNS().c_str());
-    Serial.println(ANSI_CYAN "------------------------------------------------" ANSI_RESET);
-    Serial.printf(" [AI]   Модель Gemini    : %s\n", cfg.model.c_str());
+    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
+    Serial.printf(" [AI]   Модель Gemini    : " ANSI_BOLD "%s" ANSI_RESET "\n", cfg.model.c_str());
     Serial.printf(" [AI]   API-Ключ         : %s\n", maskString(cfg.apiKey, 6, 4).c_str());
     Serial.printf(" [AI]   Системный промпт : %s\n", cfg.systemPrompt.c_str());
     Serial.printf(" [AI]   Макс. токенов    : %d\n", cfg.maxTokens);
     Serial.printf(" [AI]   Температура      : %.2f\n", cfg.temperature);
-    Serial.println(ANSI_CYAN "------------------------------------------------" ANSI_RESET);
+    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
     Serial.printf(" [СИСТЕМА] Свободно RAM  : %u байт\n", ESP.getFreeHeap());
     Serial.printf(" [СИСТЕМА] Мин. своб. RAM: %u байт\n", ESP.getMinFreeHeap());
     Serial.printf(" [СИСТЕМА] Аптайм        : %lu сек\n", millis() / 1000);
-    Serial.println(ANSI_CYAN "================================================\n" ANSI_RESET);
+    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
+    Serial.println(ANSI_YELLOW " Команды быстрой настройки:" ANSI_RESET);
+    Serial.println("  • model [№|id]         - переключить активную модель нейросети");
+    Serial.println("  • models               - список всех доступных моделей с номерами");
+    Serial.println("  • set key <ключ>       - установить API-ключ Gemini");
+    Serial.println("  • set prompt <текст>   - установить системную роль/промпт");
+    Serial.println("  • set temp <0.0-2.0>   - температура генерации (креативность)");
+    Serial.println("  • set tokens <число>   - лимит токенов ответа");
+    Serial.println("  • set dns <ip1> [ip2]  - задать Smart DNS серверы");
+    Serial.println("  • setup <wifi|ai|model>- интерактивный мастер настройки");
+    Serial.println(ANSI_CYAN "===========================================================\n" ANSI_RESET);
 }
 
 void SerialCLI::startWizard(WizardType type) {
@@ -130,6 +140,11 @@ void SerialCLI::startWizard(WizardType type) {
         Serial.println("ШАГ 1/2: Введите API-ключ Google AI Studio (Gemini API Key):");
         if (!_configMgr.getConfig().apiKey.isEmpty()) Serial.println("(Ключ уже сохранен. Нажмите Enter, чтобы оставить текущий)");
         Serial.println("(Получить ключ бесплатно можно на https://aistudio.google.com/app/apikey)");
+    } else if (type == WizardType::MODEL) {
+        Serial.println(ANSI_BOLD "           ВЫБОР МОДЕЛИ GEMINI             " ANSI_RESET);
+        Serial.println(ANSI_CYAN "========================================================" ANSI_RESET);
+        Serial.printf("Текущая активная модель: %s\n", _configMgr.getConfig().model.c_str());
+        Serial.println("Введите ID модели (например: gemini-3.5-flash-lite) или номер из команды 'models':");
     } else if (type == WizardType::PASSWORD_PROMPT) {
         Serial.println(ANSI_BOLD "           АВТОРИЗАЦИЯ СЕССИИ WI-FI             " ANSI_RESET);
         Serial.println(ANSI_CYAN "========================================================" ANSI_RESET);
@@ -226,6 +241,24 @@ void SerialCLI::handleWizardStep(const String& input) {
             _wizardStep = 0;
             Serial.println(ANSI_GREEN "\n[WIZARD] Настройки AI успешно сохранены во Flash!" ANSI_RESET);
         }
+    } else if (_currentWizard == WizardType::MODEL) {
+        String targetModel = input;
+        int num = input.toInt();
+        if (num > 0) {
+            String fromCache = _geminiClient.getModelByIndex(num);
+            if (!fromCache.isEmpty()) {
+                targetModel = fromCache;
+            }
+        }
+        if (targetModel.isEmpty()) {
+            Serial.println(ANSI_RED "[WIZARD] Имя модели не может быть пустым." ANSI_RESET);
+            return;
+        }
+        _configMgr.setModel(targetModel);
+        _configMgr.save();
+        _currentWizard = WizardType::NONE;
+        _wizardStep = 0;
+        Serial.printf(ANSI_GREEN "\n[УСПЕХ] Активная модель Gemini установлена: '%s' и сохранена во Flash!\n" ANSI_RESET, targetModel.c_str());
     }
 }
 
@@ -273,12 +306,19 @@ void SerialCLI::registerCommands() {
     addCommand("reset", "Сбросить параметры", "Система", [this](int argc, String argv[]) {
         _configMgr.resetToDefaults(); _configMgr.save(); Serial.println(ANSI_GREEN "[СБРОС] Настройки сброшены к значениям по умолчанию." ANSI_RESET);
     });
-    addCommand("wizard", "Запустить мастер настройки", "Настройки", [this](int argc, String argv[]) { startWizard(WizardType::FULL); });
-    addCommand("setup", "Настроить компонент (wifi, ai)", "Настройки", [this](int argc, String argv[]) {
-        if (argc < 2) { Serial.println("Использование: setup <wifi|ai>"); return; }
+    addCommand("wizard", "Запустить мастер полной настройки (Wi-Fi + AI)", "Настройки", [this](int argc, String argv[]) { startWizard(WizardType::FULL); });
+    addCommand("setup", "Интерактивная настройка (setup wifi|ai|model)", "Настройки", [this](int argc, String argv[]) {
+        if (argc < 2) { 
+            Serial.println(ANSI_YELLOW "Использование: setup <wifi|ai|model>" ANSI_RESET); 
+            Serial.println("  • setup wifi   - пошаговая настройка сети Wi-Fi");
+            Serial.println("  • setup ai     - пошаговая настройка API-ключа и промпта");
+            Serial.println("  • setup model  - пошаговый выбор модели нейросети");
+            return; 
+        }
         if (argv[1] == "wifi") startWizard(WizardType::WIFI);
         else if (argv[1] == "ai") startWizard(WizardType::AI);
-        else Serial.println("Неизвестный параметр. Доступно: wifi, ai");
+        else if (argv[1] == "model") startWizard(WizardType::MODEL);
+        else Serial.println("Неизвестный параметр. Доступно: wifi, ai, model");
     });
     addCommand("scan", "Сканировать сети Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.scanNetworks(); });
     addCommand("connect", "Подключиться к Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { 
@@ -287,13 +327,48 @@ void SerialCLI::registerCommands() {
         }
     });
     addCommand("disconnect", "Отключиться от Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.disconnect(); });
-    addCommand("set", "Изменить настройку (set ssid, pass, key, model, prompt, tokens, temp, dns)", "Конфигурация", [this](int argc, String argv[]) {
-        if (argc < 3) { Serial.println("Использование: set <параметр> <значение>"); return; }
+    
+    // Вспомогательный обработчик установки модели (по имени или по номеру)
+    auto applyModel = [this](const String& val) {
+        String targetModel = val;
+        int num = val.toInt();
+        if (num > 0) {
+            if (_geminiClient.getModelCount() == 0) {
+                _geminiClient.listAvailableModels();
+            }
+            String fromCache = _geminiClient.getModelByIndex(num);
+            if (!fromCache.isEmpty()) {
+                targetModel = fromCache;
+            } else {
+                Serial.printf(ANSI_RED "[ОШИБКА] Неверный номер модели (%d). Посмотрите доступные: 'models'\n" ANSI_RESET, num);
+                return;
+            }
+        }
+        _configMgr.setModel(targetModel);
+        _configMgr.save();
+        Serial.printf(ANSI_GREEN "[ОК] Активная модель Gemini установлена: '%s'\n" ANSI_RESET, targetModel.c_str());
+    };
+
+    addCommand("config", "Показать текущую конфигурацию и подсказки по настройке", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
+    addCommand("settings", "Алиас для команды config", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
+    addCommand("set", "Изменить параметр (set ssid, pass, key, model, prompt, tokens, temp, dns)", "Конфигурация", [this, applyModel](int argc, String argv[]) {
+        if (argc < 3) { 
+            Serial.println(ANSI_YELLOW "Использование: set <параметр> <значение>" ANSI_RESET); 
+            Serial.println("  • set model <id|№>      - переключить модель (напр: set model 1 или set model gemini-3.5-flash-lite)");
+            Serial.println("  • set key <api-key>     - установить API-ключ Gemini");
+            Serial.println("  • set ssid <имя_сети>   - установить имя Wi-Fi");
+            Serial.println("  • set pass <пароль>     - установить пароль Wi-Fi");
+            Serial.println("  • set prompt <текст>    - задать системный промпт");
+            Serial.println("  • set temp <0.0-2.0>    - задать температуру ответа");
+            Serial.println("  • set tokens <число>    - задать максимальное число токенов");
+            Serial.println("  • set dns <ip1> [ip2]   - задать Smart DNS серверы");
+            return; 
+        }
         String param = argv[1]; String val = argv[2];
         if (param == "ssid") { _configMgr.setWifi(val, _configMgr.getConfig().wifiPassword); Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", _configMgr.getConfig().wifiSsid.c_str()); }
         else if (param == "pass") { _configMgr.setWifi(_configMgr.getConfig().wifiSsid, val); Serial.println("[ОК] Пароль Wi-Fi установлен."); }
         else if (param == "key") { _configMgr.setApiKey(val); _configMgr.save(); Serial.println("[ОК] API-ключ сохранен."); }
-        else if (param == "model") { _configMgr.setModel(val); _configMgr.save(); Serial.printf("[ОК] Модель: '%s'\n", val.c_str()); }
+        else if (param == "model") { applyModel(val); }
         else if (param == "prompt") { _configMgr.setSystemPrompt(val); _configMgr.save(); Serial.println("[ОК] Промпт обновлен."); }
         else if (param == "tokens") { _configMgr.setMaxTokens(val.toInt()); _configMgr.save(); Serial.println("[ОК] Лимит токенов изменен."); }
         else if (param == "temp") { _configMgr.setTemperature(val.toFloat()); _configMgr.save(); Serial.println("[ОК] Температура изменена."); }
@@ -301,9 +376,20 @@ void SerialCLI::registerCommands() {
             String dns1 = argv[2]; String dns2 = (argc > 3) ? argv[3] : "";
             _configMgr.setDns(dns1, dns2); _configMgr.save(); _netMgr.applyCustomDNS();
             Serial.printf("[ОК] DNS обновлен: %s, %s\n", dns1.c_str(), dns2.c_str());
-        } else { Serial.println("Неизвестный параметр."); }
+        } else { Serial.println(ANSI_RED "Неизвестный параметр. Введите 'set' без параметров для справки." ANSI_RESET); }
     });
-    addCommand("models", "Показать доступные AI модели", "Google AI", [this](int argc, String argv[]) { _geminiClient.listAvailableModels(); });
+    addCommand("model", "Показать или переключить активную модель (model [№|id])", "Google AI", [this, applyModel](int argc, String argv[]) { 
+        if (argc < 2) {
+            Serial.printf(ANSI_CYAN "\n[AI] Текущая активная модель: " ANSI_BOLD "%s" ANSI_RESET "\n", _configMgr.getConfig().model.c_str());
+            Serial.println("  • 'models'           - показать таблицу всех доступных моделей с номерами");
+            Serial.println("  • 'model <№>'        - переключить модель по номеру (например: 'model 1')");
+            Serial.println("  • 'model <id>'       - переключить по имени (например: 'model gemini-3.5-flash-lite')");
+            Serial.println("  • 'setup model'      - интерактивный выбор модели\n");
+            return;
+        }
+        applyModel(argv[1]);
+    });
+    addCommand("models", "Таблица всех доступных моделей с номерами", "Google AI", [this](int argc, String argv[]) { _geminiClient.listAvailableModels(); });
     addCommand("test", "Тест подключения к Gemini", "Google AI", [this](int argc, String argv[]) { _geminiClient.testConnection(); });
     addCommand("demo", "Демонстрация интеграции", "Google AI", [this](int argc, String argv[]) {
         if (argc >= 2 && argv[1] == "automation") {
@@ -462,8 +548,8 @@ void SerialCLI::runSelfTest() {
     Serial.println(ANSI_CYAN "\n--- 1. Тесты менеджера конфигурации и санитизации ---" ANSI_RESET);
     {
         ConfigManager testCfg;
-        assertTest("Значения по умолчанию (gemini-2.5-flash, DNS)", 
-                   testCfg.getConfig().model == "gemini-2.5-flash" && 
+        assertTest("Значения по умолчанию (gemini-3.5-flash-lite, DNS)", 
+                   testCfg.getConfig().model == "gemini-3.5-flash-lite" && 
                    testCfg.getConfig().dnsPrimary == "111.88.96.50");
 
         testCfg.setWifi("  0266\r\n\t ", " 18888888\r\n ");

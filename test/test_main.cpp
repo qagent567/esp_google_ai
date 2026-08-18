@@ -29,7 +29,7 @@ void tearDown(void) {
 
 // 1. Тесты конфигурации (ConfigManager)
 void test_config_defaults(void) {
-    TEST_ASSERT_EQUAL_STRING("gemini-2.0-flash", cfg->getConfig().model.c_str());
+    TEST_ASSERT_EQUAL_STRING("gemini-3.5-flash-lite", cfg->getConfig().model.c_str());
     TEST_ASSERT_EQUAL_STRING("111.88.96.50", cfg->getConfig().dnsPrimary.c_str());
     TEST_ASSERT_EQUAL_STRING("111.88.96.51", cfg->getConfig().dnsSecondary.c_str());
     TEST_ASSERT_EQUAL(1024, cfg->getConfig().maxTokens);

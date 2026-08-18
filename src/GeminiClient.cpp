@@ -258,9 +258,12 @@ bool GeminiClient::listAvailableModels() {
             return false;
         }
 
-        Serial.println(F("\n================= ДОСТУПНЫЕ МОДЕЛИ GEMINI ================="));
-        Serial.println(F(" ID Модели (для 'set model <id>') | Отображаемое имя"));
-        Serial.println(F("------------------------------------------------------------"));
+        _cachedModels.clear();
+
+        Serial.println(F("\n============================== ДОСТУПНЫЕ МОДЕЛИ GEMINI =============================="));
+        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
+        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                  | Статус   |"));
+        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
 
         int count = 0;
         for (JsonObject m : models) {
@@ -285,17 +288,22 @@ bool GeminiClient::listAvailableModels() {
                 modelId = modelId.substring(7);
             }
 
+            _cachedModels.push_back(modelId);
             count++;
+
             bool isActive = (modelId.equalsIgnoreCase(cfg.model));
-            if (isActive) {
-                Serial.printf(" [*] %-28s | %s (АКТИВНА)\n", modelId.c_str(), dispName);
-            } else {
-                Serial.printf("     %-28s | %s\n", modelId.c_str(), dispName);
-            }
+            const char* statusStr = isActive ? "[АКТИВНА]" : "        ";
+            
+            Serial.printf("| %2d | %-38s | %-33s | %s |\n", 
+                          count, 
+                          modelId.c_str(), 
+                          dispName, 
+                          statusStr);
         }
-        Serial.println(F("============================================================"));
+        Serial.println(F("+----+----------------------------------------+-----------------------------------+----------+"));
         Serial.printf("Всего поддерживаемых моделей: %d\n", count);
         Serial.printf("Текущая активная модель: %s\n\n", cfg.model.c_str());
+        Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 1') или 'set model <id>'.\n"));
 
         http.end();
         return true;

@@ -18,6 +18,7 @@ public:
         FULL,
         WIFI,
         AI,
+        MODEL,
         PASSWORD_PROMPT
     };
 
