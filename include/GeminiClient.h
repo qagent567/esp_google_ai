@@ -20,25 +20,31 @@ struct GeminiResponse {
 };
 
 class UsageTracker;
+class HardwareController;
 
 /**
  * @brief Клиент для взаимодействия с Google AI Studio (Gemini API)
  */
 class GeminiClient {
 public:
-    GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker = nullptr);
+    GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker = nullptr, HardwareController* hwController = nullptr);
 
-    // Установка указателя на UsageTracker
+    // Установка указателей на внешние модули
     void setUsageTracker(UsageTracker* tracker) { _usageTracker = tracker; }
+    void setHardwareController(HardwareController* hw) { _hwController = hw; }
 
     // Определение суточного лимита модели (RPD)
     static uint32_t getModelDailyLimit(const String& modelId);
 
-    // Отправка текстового запроса (промпта) к Gemini
+    // Отправка текстового запроса (промпта) к Gemini (с авто-повтором при сбоях и обработкой аппаратных действий)
     GeminiResponse ask(const String& prompt);
 
     // Получение и вывод списка доступных моделей через API
     bool listAvailableModels();
+
+    // Загрузка и сохранение кэша моделей в NVS
+    void loadCachedModels();
+    void saveCachedModels();
 
     // Проверка доступности хоста API (DNS резолвинг и TLS пинг)
     bool testConnection();
@@ -55,6 +61,9 @@ public:
     // Парсинг JSON ответа от Google API с оптимизацией памяти
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
 
+    // Проверка и выполнение аппаратных действий (actions) в ответе модели
+    void processHardwareActions(GeminiResponse& response);
+
     // Доступ к кэшированному списку моделей
     size_t getModelCount() const { return _cachedModels.size(); }
     String getModelByIndex(size_t index) const {
@@ -68,5 +77,7 @@ public:
 private:
     ConfigManager& _configMgr;
     UsageTracker* _usageTracker;
+    HardwareController* _hwController;
     std::vector<String> _cachedModels;
 };
+

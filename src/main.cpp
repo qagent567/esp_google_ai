@@ -12,14 +12,16 @@
 #include "NetworkManager.h"
 #include "GeminiClient.h"
 #include "UsageTracker.h"
+#include "HardwareController.h"
 #include "CLI.h"
 
 // Глобальные объекты модулей системы
 ConfigManager configManager;
 NetworkManager networkManager(configManager);
 UsageTracker usageTracker;
-GeminiClient geminiClient(configManager, &usageTracker);
-SerialCLI serialCli(configManager, networkManager, geminiClient, usageTracker);
+HardwareController hardwareController;
+GeminiClient geminiClient(configManager, &usageTracker, &hardwareController);
+SerialCLI serialCli(configManager, networkManager, geminiClient, usageTracker, hardwareController);
 
 void setup() {
     // Инициализация Serial интерфейса на скорости 115200 бод

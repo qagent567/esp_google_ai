@@ -5,6 +5,7 @@
 #include "NetworkManager.h"
 #include "GeminiClient.h"
 #include "UsageTracker.h"
+#include "HardwareController.h"
 
 #include <vector>
 #include <functional>
@@ -23,7 +24,7 @@ public:
         PASSWORD_PROMPT
     };
 
-    SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient, UsageTracker& usageTracker);
+    SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient, UsageTracker& usageTracker, HardwareController& hwController);
 
     // Инициализация CLI
     void begin();
@@ -51,6 +52,7 @@ private:
     NetworkManager& _netMgr;
     GeminiClient& _geminiClient;
     UsageTracker& _usageTracker;
+    HardwareController& _hwController;
 
     String _inputBuffer;
     WizardType _currentWizard = WizardType::NONE;

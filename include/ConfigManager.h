@@ -16,6 +16,7 @@ struct AppConfig {
     String systemPrompt;    // Системный промпт (инструкция роли)
     int maxTokens;          // Максимальное количество токенов в ответе
     float temperature;      // Температура генерации (0.0 - 2.0)
+    int timezone;           // Часовой пояс (смещение UTC в часах, напр. 3 для Москвы, 9 для Токио)
     bool isConfigured;      // Флаг сохранения корректной конфигурации
 };
 
@@ -59,6 +60,7 @@ public:
     void setSystemPrompt(const String& prompt);
     void setMaxTokens(int tokens);
     void setTemperature(float temp);
+    void setTimezone(int tz);
 
 private:
     Preferences _prefs;

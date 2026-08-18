@@ -9,42 +9,44 @@
 #define ANSI_CYAN    ""
 #define ANSI_BOLD    ""
 
-SerialCLI::SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient, UsageTracker& usageTracker)
-    : _configMgr(configMgr), _netMgr(netMgr), _geminiClient(geminiClient), _usageTracker(usageTracker) {}
+SerialCLI::SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient, UsageTracker& usageTracker, HardwareController& hwController)
+    : _configMgr(configMgr), _netMgr(netMgr), _geminiClient(geminiClient), _usageTracker(usageTracker), _hwController(hwController) {}
 
 void SerialCLI::begin() {
     _inputBuffer.reserve(256);
     _usageTracker.begin();
+    _hwController.begin();
     registerCommands();
     printWelcome();
     
     if (_configMgr.hasSavedConfig()) {
-        Serial.printf("\n" ANSI_GREEN "[СИСТЕМА] Найдена сохраненная конфигурация (Сеть: '%s', API-ключ настроен)." ANSI_RESET "\n", 
+        Serial.printf("\n[СИСТЕМА] Найдена сохраненная конфигурация (Сеть: '%s', API-ключ настроен).\n", 
                       _configMgr.getConfig().wifiSsid.c_str());
-        Serial.println(ANSI_CYAN "[СИСТЕМА] Автоматическое подключение к Wi-Fi..." ANSI_RESET);
+        Serial.println("[СИСТЕМА] Автоматическое подключение к Wi-Fi...");
         _netMgr.connect();
         printPrompt();
     } else {
-        Serial.println(ANSI_RED "\n[!] Устройство еще не настроено (нет сохраненной конфигурации)." ANSI_RESET);
-        Serial.println(ANSI_RED "[!] Автоматический запуск мастера первоначальной настройки...\n" ANSI_RESET);
+        Serial.println("\n[!] Устройство еще не настроено (нет сохраненной конфигурации).");
+        Serial.println("[!] Автоматический запуск мастера первоначальной настройки...\n");
         startWizard(WizardType::FULL);
     }
 }
 
 void SerialCLI::printWelcome() {
-    Serial.println(ANSI_CYAN "\n========================================================" ANSI_RESET);
-    Serial.println(ANSI_BOLD "       ESP32 + Google AI Studio (Gemini) [Smart DNS]     " ANSI_RESET);
-    Serial.println(ANSI_CYAN "========================================================" ANSI_RESET);
+    Serial.println("\n========================================================");
+    Serial.println("       ESP32 + Google AI Studio (Gemini) [Smart DNS]     ");
+    Serial.println("========================================================");
     Serial.println("Обход ограничений РФ через Smart DNS (xbox-dns.ru)");
+    Serial.println("Интеграция с аппаратными ресурсами ESP32 (GPIO, Sensors)");
     Serial.println("Введите 'help' для списка команд или 'wizard' для настройки.");
-    Serial.println(ANSI_CYAN "--------------------------------------------------------" ANSI_RESET);
+    Serial.println("--------------------------------------------------------");
 }
 
 void SerialCLI::printPrompt() {
     if (_currentWizard != WizardType::NONE) {
-        Serial.print(ANSI_YELLOW "[WIZARD] > " ANSI_RESET);
+        Serial.print("[WIZARD] > ");
     } else {
-        Serial.print(ANSI_GREEN ANSI_BOLD "root@esp32" ANSI_RESET ":" ANSI_BLUE "~$ " ANSI_RESET);
+        Serial.print("root@esp32:~$ ");
     }
 }
 
@@ -65,36 +67,37 @@ void SerialCLI::clearScreen() {
 }
 
 void SerialCLI::printHelp() {
-    Serial.println(ANSI_CYAN "\n--- СПИСОК ДОСТУПНЫХ КОМАНД ---" ANSI_RESET);
+    Serial.println("\n--- СПИСОК ДОСТУПНЫХ КОМАНД ---");
     
     String currentCategory = "";
     for (const auto& cmd : _commands) {
         if (cmd.category != currentCategory) {
             currentCategory = cmd.category;
-            Serial.printf(ANSI_YELLOW "\n %s:\n" ANSI_RESET, currentCategory.c_str());
+            Serial.printf("\n %s:\n", currentCategory.c_str());
         }
         Serial.printf("   %-24s - %s\n", cmd.name.c_str(), cmd.description.c_str());
     }
     
-    Serial.println(ANSI_YELLOW "\n Отправка запросов в AI:" ANSI_RESET);
-    Serial.println("   ask <вопрос>             - Отправить запрос явно");
-    Serial.println("   <любой текст>            - Любой нераспознанный текст отправляется в Gemini");
-    Serial.println(ANSI_CYAN "--------------------------------\n" ANSI_RESET);
+    Serial.println("\n Отправка запросов в AI и управление платой:");
+    Serial.println("   ask <вопрос/команда>     - Отправить запрос к Gemini (поддерживает управление GPIO)");
+    Serial.println("   <любой текст>            - Нераспознанный текст автоматически отправляется в Gemini");
+    Serial.println("--------------------------------\n");
 }
 
 void SerialCLI::printStatus() {
     const AppConfig& cfg = _configMgr.getConfig();
+    DeviceTelemetry tel = _hwController.getTelemetry();
 
-    Serial.println(ANSI_CYAN "\n================ ТЕКУЩИЙ СТАТУС УСТРОЙСТВА ================" ANSI_RESET);
-    Serial.printf(" [СЕТЬ] Wi-Fi SSID       : %s\n", cfg.wifiSsid.isEmpty() ? ANSI_RED "[Не задан]" ANSI_RESET : cfg.wifiSsid.c_str());
+    Serial.println("\n================ ТЕКУЩИЙ СТАТУС УСТРОЙСТВА ================");
+    Serial.printf(" [СЕТЬ] Wi-Fi SSID       : %s\n", cfg.wifiSsid.isEmpty() ? "[Не задан]" : cfg.wifiSsid.c_str());
     Serial.printf(" [СЕТЬ] Пароль           : %s\n", maskString(cfg.wifiPassword, 1, 1).c_str());
-    Serial.printf(" [СЕТЬ] Статус           : %s\n", _netMgr.isConnected() ? ANSI_GREEN "ПОДКЛЮЧЕНО" ANSI_RESET : ANSI_RED "ОТКЛЮЧЕНО" ANSI_RESET);
+    Serial.printf(" [СЕТЬ] Статус           : %s\n", _netMgr.isConnected() ? "ПОДКЛЮЧЕНО" : "ОТКЛЮЧЕНО");
     Serial.printf(" [СЕТЬ] Локальный IP     : %s\n", _netMgr.getLocalIP().c_str());
     Serial.printf(" [СЕТЬ] Уровень сигнала  : %d dBm\n", _netMgr.getRSSI());
     Serial.printf(" [DNS]  Smart DNS 1      : %s (Активный: %s)\n", cfg.dnsPrimary.c_str(), _netMgr.getPrimaryDNS().c_str());
     Serial.printf(" [DNS]  Smart DNS 2      : %s (Активный: %s)\n", cfg.dnsSecondary.c_str(), _netMgr.getSecondaryDNS().c_str());
-    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
-    Serial.printf(" [AI]   Модель Gemini    : " ANSI_BOLD "%s" ANSI_RESET "\n", cfg.model.c_str());
+    Serial.println("-----------------------------------------------------------");
+    Serial.printf(" [AI]   Модель Gemini    : %s\n", cfg.model.c_str());
     Serial.printf(" [AI]   API-Ключ         : %s\n", maskString(cfg.apiKey, 6, 4).c_str());
     Serial.printf(" [AI]   Системный промпт : %s\n", cfg.systemPrompt.c_str());
     Serial.printf(" [AI]   Макс. токенов    : %d (температура: %.2f)\n", cfg.maxTokens, cfg.temperature);
@@ -109,26 +112,23 @@ void SerialCLI::printStatus() {
         Serial.printf(" [AI]   Суточный расход  : Безлимитно (израсходовано: %u запросов) | Токенов: %u\n", 
                       uStats.requestsToday, uStats.totalTokensToday);
     }
-    Serial.printf(" [AI]   Сброс суток      : %s (текущее время: %s)\n", 
-                  _usageTracker.getTimeUntilMidnight().c_str(), _usageTracker.getCurrentTimeString().c_str());
+    Serial.printf(" [AI]   Сброс суток      : %s (время платы: %s, UTC%+d)\n", 
+                  _usageTracker.getTimeUntilMidnight().c_str(), _usageTracker.getCurrentTimeString().c_str(), cfg.timezone);
 
-    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
-    Serial.printf(" [СИСТЕМА] Свободно RAM  : %u байт\n", ESP.getFreeHeap());
-    Serial.printf(" [СИСТЕМА] Мин. своб. RAM: %u байт\n", ESP.getMinFreeHeap());
-    Serial.printf(" [СИСТЕМА] Аптайм        : %lu сек\n", millis() / 1000);
-    Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
-    Serial.println(ANSI_YELLOW " Команды быстрой настройки:" ANSI_RESET);
-    Serial.println("  • quota / usage        - подробный отчет о суточных лимитах и расходе");
-    Serial.println("  • model [№|id]         - переключить активную модель нейросети");
-    Serial.println("  • models               - список всех доступных моделей с номерами и лимитами");
-    Serial.println("  • set limit <число>    - установить суточный лимит запросов (0 = безлимит)");
-    Serial.println("  • set key <ключ>       - установить API-ключ Gemini");
-    Serial.println("  • set prompt <текст>   - установить системную роль/промпт");
-    Serial.println("  • set temp <0.0-2.0>   - температура генерации (креативность)");
-    Serial.println("  • set tokens <число>   - лимит токенов ответа");
-    Serial.println("  • set dns <ip1> [ip2]  - задать Smart DNS серверы");
-    Serial.println("  • setup <wifi|ai|model>- интерактивный мастер настройки");
-    Serial.println(ANSI_CYAN "===========================================================\n" ANSI_RESET);
+    Serial.println("-----------------------------------------------------------");
+    Serial.printf(" [ЖЕЛЕЗО] Температура чипа : %.1f °C\n", tel.chipTempC);
+    Serial.printf(" [ЖЕЛЕЗО] Частота CPU      : %u МГц (Flash: %u МБ)\n", tel.cpuFreqMHz, tel.flashSizeBytes / (1024 * 1024));
+    Serial.printf(" [СИСТЕМА] Свободно RAM    : %u байт (Мин: %u байт)\n", tel.freeHeapBytes, tel.minFreeHeapBytes);
+    Serial.printf(" [СИСТЕМА] Аптайм платы    : %lu сек\n", tel.uptimeSec);
+    Serial.println("-----------------------------------------------------------");
+    Serial.println(" Команды быстрого доступа:");
+    Serial.println("  • quota / usage          - отчет о суточных лимитах и расходе токенов");
+    Serial.println("  • telemetry / sensors    - показания температуры чипа и памяти");
+    Serial.println("  • gpio <read|write|...>  - прямое управление пинами ESP32");
+    Serial.println("  • models / model [№|id]  - список и выбор модели Gemini");
+    Serial.println("  • set <limit|key|tz|...> - изменить параметры конфигурации");
+    Serial.println("  • setup <wifi|ai|model>  - интерактивный мастер настройки");
+    Serial.println("===========================================================\n");
 }
 
 void SerialCLI::startWizard(WizardType type) {
@@ -345,12 +345,95 @@ void SerialCLI::registerCommands() {
         else Serial.println("Неизвестный параметр. Доступно: wifi, ai, model");
     });
     addCommand("scan", "Сканировать сети Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.scanNetworks(); });
-    addCommand("connect", "Подключиться к Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { 
+    addCommand("connect", "Подключиться к Wi-Fi (connect [№|SSID] [пароль])", "Wi-Fi", [this](int argc, String argv[]) { 
+        if (argc >= 2) {
+            String targetSsid = argv[1];
+            int scanIdx = targetSsid.toInt();
+            if (scanIdx > 0 && scanIdx <= (int)_netMgr.getScannedCount()) {
+                targetSsid = _netMgr.getScannedSSID(scanIdx);
+                Serial.printf("[Wi-Fi] Выбрана сеть №%d: '%s'\n", scanIdx, targetSsid.c_str());
+            }
+            String pass = (argc >= 3) ? argv[2] : _configMgr.getConfig().wifiPassword;
+            _configMgr.setWifi(targetSsid, pass);
+        }
         if (_netMgr.connect()) {
             _configMgr.save();
         }
     });
     addCommand("disconnect", "Отключиться от Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.disconnect(); });
+
+    // Команды управления аппаратной частью ESP32
+    addCommand("gpio", "Управление пинами ESP32 (gpio write|read|toggle|mode)", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        if (argc < 3) {
+            Serial.println("Использование команды gpio:");
+            Serial.println("  • gpio write <pin> <0|1>       - установить уровень на выходе (напр. 'gpio write 2 1')");
+            Serial.println("  • gpio read <pin>             - прочитать цифровой уровень (0 или 1)");
+            Serial.println("  • gpio analog <pin>           - замерить аналоговый вход ADC (0-4095, напр. 34)");
+            Serial.println("  • gpio toggle <pin>           - инвертировать состояние выхода");
+            Serial.println("  • gpio mode <pin> <in|out|pullup> - настроить режим работы пина");
+            Serial.println("  (Встроенный синий светодиод платы обычно подключен к GPIO 2)");
+            return;
+        }
+        String sub = argv[1];
+        int pin = argv[2].toInt();
+        if (!_hwController.isValidGpio(pin)) {
+            Serial.printf("[ОШИБКА] Недопустимый номер GPIO: %d\n", pin);
+            return;
+        }
+        if (sub == "write") {
+            int val = (argc >= 4) ? argv[3].toInt() : 1;
+            if (_hwController.writePin(pin, val)) {
+                Serial.printf("[GPIO] Пин %d установлен в %s\n", pin, val ? "HIGH (1)" : "LOW (0)");
+            } else {
+                Serial.printf("[ОШИБКА] Не удалось записать на GPIO %d (возможно, пин только на вход)\n", pin);
+            }
+        } else if (sub == "read") {
+            int val = _hwController.readPin(pin);
+            Serial.printf("[GPIO] Состояние GPIO %d: %d\n", pin, val);
+        } else if (sub == "analog" || sub == "adc") {
+            int val = _hwController.readAnalogPin(pin);
+            if (val >= 0) {
+                float v = (val / 4095.0f) * 3.3f;
+                Serial.printf("[GPIO] ADC GPIO %d: %d (%.2f В)\n", pin, val, v);
+            } else {
+                Serial.printf("[ОШИБКА] Пин %d не поддерживает аналоговое чтение ADC1\n", pin);
+            }
+        } else if (sub == "toggle") {
+            if (_hwController.togglePin(pin)) {
+                int val = _hwController.readPin(pin);
+                Serial.printf("[GPIO] Состояние GPIO %d переключено -> %d\n", pin, val);
+            } else {
+                Serial.printf("[ОШИБКА] Не удалось переключить GPIO %d\n", pin);
+            }
+        } else if (sub == "mode") {
+            String modeStr = (argc >= 4) ? argv[3] : "out";
+            uint8_t m = OUTPUT;
+            if (modeStr == "in") m = INPUT;
+            else if (modeStr == "pullup") m = INPUT_PULLUP;
+            if (_hwController.setPinMode(pin, m)) {
+                Serial.printf("[GPIO] Режим GPIO %d установлен: %s\n", pin, modeStr.c_str());
+            } else {
+                Serial.printf("[ОШИБКА] Не удалось установить режим для GPIO %d\n", pin);
+            }
+        } else {
+            Serial.println("Неизвестное действие gpio. Введите 'gpio' без параметров для справки.");
+        }
+    });
+
+    addCommand("telemetry", "Показания аппаратных датчиков и ресурсов платы", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        Serial.println("\n[ЖЕЛЕЗО] Телеметрия микроконтроллера ESP32:");
+        Serial.println(_hwController.getTelemetrySummary());
+    });
+    addCommand("sensors", "Алиас для telemetry", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        Serial.println("\n[ЖЕЛЕЗО] Телеметрия микроконтроллера ESP32:");
+        Serial.println(_hwController.getTelemetrySummary());
+    });
+
+    addCommand("i2c", "Сканирование устройств на шине I2C (i2c scan [sda] [scl])", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        uint8_t sda = (argc >= 3) ? argv[2].toInt() : 21;
+        uint8_t scl = (argc >= 4) ? argv[3].toInt() : 22;
+        Serial.println(_hwController.scanI2C(sda, scl));
+    });
     
     // Вспомогательный обработчик установки модели (по имени или по номеру)
     auto applyModel = [this](const String& val) {
@@ -364,13 +447,13 @@ void SerialCLI::registerCommands() {
             if (!fromCache.isEmpty()) {
                 targetModel = fromCache;
             } else {
-                Serial.printf(ANSI_RED "[ОШИБКА] Неверный номер модели (%d). Посмотрите доступные: 'models'\n" ANSI_RESET, num);
+                Serial.printf("[ОШИБКА] Неверный номер модели (%d). Посмотрите доступные: 'models'\n", num);
                 return;
             }
         }
         _configMgr.setModel(targetModel);
         _configMgr.save();
-        Serial.printf(ANSI_GREEN "[ОК] Активная модель Gemini установлена: '%s'\n" ANSI_RESET, targetModel.c_str());
+        Serial.printf("[ОК] Активная модель Gemini установлена: '%s'\n", targetModel.c_str());
     };
 
     addCommand("config", "Показать текущую конфигурацию и подсказки по настройке", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
@@ -378,10 +461,11 @@ void SerialCLI::registerCommands() {
     addCommand("quota", "Суточные лимиты, расход запросов и токенов", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
     addCommand("usage", "Алиас для команды quota", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
     addCommand("limits", "Алиас для команды quota", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
-    addCommand("set", "Изменить параметр (set limit, model, key, prompt, temp, tokens, dns, ssid, pass)", "Конфигурация", [this, applyModel](int argc, String argv[]) {
+    addCommand("set", "Изменить параметр (set limit, tz, model, key, prompt, temp, tokens, dns, ssid, pass)", "Конфигурация", [this, applyModel](int argc, String argv[]) {
         if (argc < 3) { 
-            Serial.println(ANSI_YELLOW "Использование: set <параметр> <значение>" ANSI_RESET); 
+            Serial.println("Использование: set <параметр> <значение>"); 
             Serial.println("  • set limit <число>     - установить суточный лимит запросов (0 = безлимитно)");
+            Serial.println("  • set tz <часы>         - часовой пояс UTC (напр. 'set tz 3' для Москвы, 'set tz 9' для Токио)");
             Serial.println("  • set model <id|№>      - переключить модель (напр: set model 24 или set model gemini-3.5-flash-lite)");
             Serial.println("  • set key <api-key>     - установить API-ключ Gemini");
             Serial.println("  • set ssid <имя_сети>   - установить имя Wi-Fi");
@@ -397,6 +481,13 @@ void SerialCLI::registerCommands() {
             _usageTracker.setDailyLimit(val.toInt()); 
             Serial.printf("[ОК] Суточный лимит запросов установлен: %u (0 = безлимитно)\n", (unsigned int)val.toInt()); 
         }
+        else if (param == "tz" || param == "timezone") {
+            int tz = val.toInt();
+            _configMgr.setTimezone(tz);
+            _configMgr.save();
+            configTime(tz * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+            Serial.printf("[ОК] Часовой пояс установлен: UTC%+d\n", tz);
+        }
         else if (param == "ssid") { _configMgr.setWifi(val, _configMgr.getConfig().wifiPassword); Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", _configMgr.getConfig().wifiSsid.c_str()); }
         else if (param == "pass") { _configMgr.setWifi(_configMgr.getConfig().wifiSsid, val); Serial.println("[ОК] Пароль Wi-Fi установлен."); }
         else if (param == "key") { _configMgr.setApiKey(val); _configMgr.save(); Serial.println("[ОК] API-ключ сохранен."); }
@@ -408,11 +499,11 @@ void SerialCLI::registerCommands() {
             String dns1 = argv[2]; String dns2 = (argc > 3) ? argv[3] : "";
             _configMgr.setDns(dns1, dns2); _configMgr.save(); _netMgr.applyCustomDNS();
             Serial.printf("[ОК] DNS обновлен: %s, %s\n", dns1.c_str(), dns2.c_str());
-        } else { Serial.println(ANSI_RED "Неизвестный параметр. Введите 'set' без параметров для справки." ANSI_RESET); }
+        } else { Serial.println("Неизвестный параметр. Введите 'set' без параметров для справки."); }
     });
     addCommand("model", "Показать или переключить активную модель (model [№|id])", "Google AI", [this, applyModel](int argc, String argv[]) { 
         if (argc < 2) {
-            Serial.printf(ANSI_CYAN "\n[AI] Текущая активная модель: " ANSI_BOLD "%s" ANSI_RESET "\n", _configMgr.getConfig().model.c_str());
+            Serial.printf("\n[AI] Текущая активная модель: %s\n", _configMgr.getConfig().model.c_str());
             Serial.println("  • 'models'           - показать таблицу всех доступных моделей с номерами и лимитами");
             Serial.println("  • 'model <№>'        - переключить модель по номеру (например: 'model 24')");
             Serial.println("  • 'model <id>'       - переключить по имени (например: 'model gemini-3.5-flash-lite')");
@@ -425,7 +516,7 @@ void SerialCLI::registerCommands() {
     addCommand("test", "Тест подключения к Gemini", "Google AI", [this](int argc, String argv[]) { _geminiClient.testConnection(); });
     addCommand("demo", "Демонстрация интеграции", "Google AI", [this](int argc, String argv[]) {
         if (argc >= 2 && argv[1] == "automation") {
-            Serial.println(ANSI_CYAN "[DEMO] Демонстрация работы AI в программном коде ESP32..." ANSI_RESET);
+            Serial.println("[DEMO] Демонстрация работы AI в программном коде ESP32...");
             String prompt = "Температура в серверной сейчас 35.5 градусов Цельсия. Норма до 25. Что мне сделать? Ответь очень кратко, словно ты аварийная система ESP32.";
             Serial.println(prompt);
             GeminiResponse res = _geminiClient.ask(prompt);

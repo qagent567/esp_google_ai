@@ -98,14 +98,16 @@ bool NetworkManager::connect() {
         // Применяем Smart DNS после получения сетевых настроек от DHCP
         applyCustomDNS();
         
-        // Запуск синхронизации времени по протоколу NTP (UTC+3 для Московского времени)
-        configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+        // Запуск синхронизации времени по протоколу NTP с учетом часового пояса из конфигурации
+        int tz = _configMgr.getConfig().timezone;
+        configTime(tz * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
 
         Serial.println(F("[Wi-Fi] Успешно подключено!"));
         Serial.printf("[Wi-Fi] Получен IP: %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("[Wi-Fi] Уровень сигнала: %d dBm\n", WiFi.RSSI());
         Serial.printf("[Wi-Fi] Активный DNS 1: %s\n", WiFi.dnsIP(0).toString().c_str());
         Serial.printf("[Wi-Fi] Активный DNS 2: %s\n", WiFi.dnsIP(1).toString().c_str());
+        Serial.printf("[Wi-Fi] Часовой пояс NTP: UTC%+d\n", tz);
         return true;
     } else {
         Serial.printf("[Wi-Fi] Не удалось подключиться (Код статуса: %d). Проверьте имя сети и пароль.\n", WiFi.status());
@@ -148,12 +150,15 @@ void NetworkManager::update() {
 
 void NetworkManager::scanNetworks() {
     Serial.println(F("\n[Wi-Fi] Сканирование доступных беспроводных сетей..."));
+    _scannedNetworks.clear();
     int n = WiFi.scanNetworks();
     if (n == 0) {
         Serial.println(F("[Wi-Fi] Сети не найдены."));
     } else {
         Serial.printf("[Wi-Fi] Найдено сетей: %d\n", n);
         for (int i = 0; i < n; ++i) {
+            String ssid = WiFi.SSID(i);
+            _scannedNetworks.push_back(ssid);
             const char* encType = "Открытая";
             switch (WiFi.encryptionType(i)) {
                 case WIFI_AUTH_WEP: encType = "WEP"; break;
@@ -165,11 +170,12 @@ void NetworkManager::scanNetworks() {
             }
             Serial.printf("  %2d: %-24s (Сигнал: %3d dBm, Защита: %s)\n", 
                           i + 1, 
-                          WiFi.SSID(i).c_str(), 
+                          ssid.c_str(), 
                           WiFi.RSSI(i), 
                           encType);
             delay(10);
         }
+        Serial.println(F("\n[Подсказка] Для быстрого подключения введите 'connect <№> <пароль>' или 'set ssid <имя>'."));
     }
     WiFi.scanDelete();
 }

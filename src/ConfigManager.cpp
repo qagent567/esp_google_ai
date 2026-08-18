@@ -7,6 +7,7 @@ static const char* DEFAULT_DNS_SECONDARY = "111.88.96.51"; // xbox-dns.ru Second
 static const char* DEFAULT_SYSTEM_PROMPT = "Ты полезный AI-ассистент на ESP32. Отвечай кратко, понятно и по делу.";
 static const int DEFAULT_MAX_TOKENS = 1024;
 static const float DEFAULT_TEMPERATURE = 0.7f;
+static const int DEFAULT_TIMEZONE = 3; // По умолчанию UTC+3 (Москва)
 
 // Вспомогательная функция санитизации строк
 static String sanitize(String str) {
@@ -56,6 +57,7 @@ void ConfigManager::resetToDefaults() {
     _config.systemPrompt = DEFAULT_SYSTEM_PROMPT;
     _config.maxTokens = DEFAULT_MAX_TOKENS;
     _config.temperature = DEFAULT_TEMPERATURE;
+    _config.timezone = DEFAULT_TIMEZONE;
     _config.isConfigured = false;
 }
 
@@ -70,6 +72,7 @@ void ConfigManager::load() {
     _config.systemPrompt.trim();
     _config.maxTokens = _prefs.getInt("max_tokens", DEFAULT_MAX_TOKENS);
     _config.temperature = _prefs.getFloat("temp", DEFAULT_TEMPERATURE);
+    _config.timezone = _prefs.getInt("timezone", DEFAULT_TIMEZONE);
     _config.isConfigured = _prefs.getBool("configured", false);
 
     // Валидация значений по умолчанию
@@ -78,6 +81,7 @@ void ConfigManager::load() {
     if (_config.dnsSecondary.isEmpty()) _config.dnsSecondary = DEFAULT_DNS_SECONDARY;
     if (_config.maxTokens <= 0) _config.maxTokens = DEFAULT_MAX_TOKENS;
     if (_config.temperature < 0.0f || _config.temperature > 2.0f) _config.temperature = DEFAULT_TEMPERATURE;
+    if (_config.timezone < -12 || _config.timezone > 14) _config.timezone = DEFAULT_TIMEZONE;
 }
 
 bool ConfigManager::save() {
@@ -101,6 +105,7 @@ bool ConfigManager::save() {
     ok &= (_prefs.putString("prompt", _config.systemPrompt) > 0);
     ok &= (_prefs.putInt("max_tokens", _config.maxTokens) > 0);
     ok &= (_prefs.putFloat("temp", _config.temperature) > 0);
+    ok &= (_prefs.putInt("timezone", _config.timezone) > 0);
     ok &= _prefs.putBool("configured", _config.isConfigured);
 
     if (ok) {
@@ -158,3 +163,10 @@ void ConfigManager::setTemperature(float temp) {
         _config.temperature = temp;
     }
 }
+
+void ConfigManager::setTimezone(int tz) {
+    if (tz >= -12 && tz <= 14) {
+        _config.timezone = tz;
+    }
+}
+
