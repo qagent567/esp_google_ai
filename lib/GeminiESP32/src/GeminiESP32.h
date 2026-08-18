@@ -7,11 +7,11 @@
 #include <lwip/dns.h>
 #include <lwip/ip_addr.h>
 
-// Подключение внутренних компонентов
-#include "../../../include/ConfigManager.h"
-#include "../../../include/HardwareController.h"
-#include "../../../include/UsageTracker.h"
-#include "../../../include/GeminiClient.h"
+// Подключение внутренних модулей библиотеки
+#include "ConfigManager.h"
+#include "HardwareController.h"
+#include "UsageTracker.h"
+#include "GeminiClient.h"
 
 /**
  * @brief Главный высокоуровневый класс библиотеки GeminiESP32
