@@ -9,11 +9,12 @@
 #define ANSI_CYAN    ""
 #define ANSI_BOLD    ""
 
-SerialCLI::SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient)
-    : _configMgr(configMgr), _netMgr(netMgr), _geminiClient(geminiClient) {}
+SerialCLI::SerialCLI(ConfigManager& configMgr, NetworkManager& netMgr, GeminiClient& geminiClient, UsageTracker& usageTracker)
+    : _configMgr(configMgr), _netMgr(netMgr), _geminiClient(geminiClient), _usageTracker(usageTracker) {}
 
 void SerialCLI::begin() {
     _inputBuffer.reserve(256);
+    _usageTracker.begin();
     registerCommands();
     printWelcome();
     
@@ -96,16 +97,31 @@ void SerialCLI::printStatus() {
     Serial.printf(" [AI]   Модель Gemini    : " ANSI_BOLD "%s" ANSI_RESET "\n", cfg.model.c_str());
     Serial.printf(" [AI]   API-Ключ         : %s\n", maskString(cfg.apiKey, 6, 4).c_str());
     Serial.printf(" [AI]   Системный промпт : %s\n", cfg.systemPrompt.c_str());
-    Serial.printf(" [AI]   Макс. токенов    : %d\n", cfg.maxTokens);
-    Serial.printf(" [AI]   Температура      : %.2f\n", cfg.temperature);
+    Serial.printf(" [AI]   Макс. токенов    : %d (температура: %.2f)\n", cfg.maxTokens, cfg.temperature);
+    
+    DailyUsageStats uStats = _usageTracker.getStats();
+    if (uStats.dailyRequestLimit > 0) {
+        int rem = (int)uStats.dailyRequestLimit - (int)uStats.requestsToday;
+        if (rem < 0) rem = 0;
+        Serial.printf(" [AI]   Суточный расход  : %u / %u запросов (Осталось: %d) | Токенов: %u\n", 
+                      uStats.requestsToday, uStats.dailyRequestLimit, rem, uStats.totalTokensToday);
+    } else {
+        Serial.printf(" [AI]   Суточный расход  : Безлимитно (израсходовано: %u запросов) | Токенов: %u\n", 
+                      uStats.requestsToday, uStats.totalTokensToday);
+    }
+    Serial.printf(" [AI]   Сброс суток      : %s (текущее время: %s)\n", 
+                  _usageTracker.getTimeUntilMidnight().c_str(), _usageTracker.getCurrentTimeString().c_str());
+
     Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
     Serial.printf(" [СИСТЕМА] Свободно RAM  : %u байт\n", ESP.getFreeHeap());
     Serial.printf(" [СИСТЕМА] Мин. своб. RAM: %u байт\n", ESP.getMinFreeHeap());
     Serial.printf(" [СИСТЕМА] Аптайм        : %lu сек\n", millis() / 1000);
     Serial.println(ANSI_CYAN "-----------------------------------------------------------" ANSI_RESET);
     Serial.println(ANSI_YELLOW " Команды быстрой настройки:" ANSI_RESET);
+    Serial.println("  • quota / usage        - подробный отчет о суточных лимитах и расходе");
     Serial.println("  • model [№|id]         - переключить активную модель нейросети");
-    Serial.println("  • models               - список всех доступных моделей с номерами");
+    Serial.println("  • models               - список всех доступных моделей с номерами и лимитами");
+    Serial.println("  • set limit <число>    - установить суточный лимит запросов (0 = безлимит)");
     Serial.println("  • set key <ключ>       - установить API-ключ Gemini");
     Serial.println("  • set prompt <текст>   - установить системную роль/промпт");
     Serial.println("  • set temp <0.0-2.0>   - температура генерации (креативность)");
@@ -303,8 +319,16 @@ void SerialCLI::registerCommands() {
         if (_netMgr.isConnected()) { _configMgr.save(); Serial.println(ANSI_GREEN "[ОК] Конфигурация сохранена." ANSI_RESET); }
         else { Serial.println(ANSI_YELLOW "[ВНИМАНИЕ] Сохранение разрешено только при активном подключении к сети!" ANSI_RESET); }
     });
-    addCommand("reset", "Сбросить параметры", "Система", [this](int argc, String argv[]) {
-        _configMgr.resetToDefaults(); _configMgr.save(); Serial.println(ANSI_GREEN "[СБРОС] Настройки сброшены к значениям по умолчанию." ANSI_RESET);
+    addCommand("reset", "Сбросить параметры (reset, reset quota, reset allquota)", "Система", [this](int argc, String argv[]) {
+        if (argc >= 2 && (argv[1] == "quota" || argv[1] == "usage")) {
+            _usageTracker.resetDailyUsage();
+            Serial.println(ANSI_GREEN "[СБРОС] Суточные счетчики запросов и токенов сброшены." ANSI_RESET);
+        } else if (argc >= 2 && argv[1] == "allquota") {
+            _usageTracker.resetAllUsage();
+            Serial.println(ANSI_GREEN "[СБРОС] Вся статистика использования (включая общую) сброшена." ANSI_RESET);
+        } else {
+            _configMgr.resetToDefaults(); _configMgr.save(); Serial.println(ANSI_GREEN "[СБРОС] Настройки сброшены к значениям по умолчанию." ANSI_RESET);
+        }
     });
     addCommand("wizard", "Запустить мастер полной настройки (Wi-Fi + AI)", "Настройки", [this](int argc, String argv[]) { startWizard(WizardType::FULL); });
     addCommand("setup", "Интерактивная настройка (setup wifi|ai|model)", "Настройки", [this](int argc, String argv[]) {
@@ -351,21 +375,29 @@ void SerialCLI::registerCommands() {
 
     addCommand("config", "Показать текущую конфигурацию и подсказки по настройке", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
     addCommand("settings", "Алиас для команды config", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
-    addCommand("set", "Изменить параметр (set ssid, pass, key, model, prompt, tokens, temp, dns)", "Конфигурация", [this, applyModel](int argc, String argv[]) {
+    addCommand("quota", "Суточные лимиты, расход запросов и токенов", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
+    addCommand("usage", "Алиас для команды quota", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
+    addCommand("limits", "Алиас для команды quota", "Google AI", [this](int argc, String argv[]) { _usageTracker.printQuotaReport(); });
+    addCommand("set", "Изменить параметр (set limit, model, key, prompt, temp, tokens, dns, ssid, pass)", "Конфигурация", [this, applyModel](int argc, String argv[]) {
         if (argc < 3) { 
             Serial.println(ANSI_YELLOW "Использование: set <параметр> <значение>" ANSI_RESET); 
-            Serial.println("  • set model <id|№>      - переключить модель (напр: set model 1 или set model gemini-3.5-flash-lite)");
+            Serial.println("  • set limit <число>     - установить суточный лимит запросов (0 = безлимитно)");
+            Serial.println("  • set model <id|№>      - переключить модель (напр: set model 24 или set model gemini-3.5-flash-lite)");
             Serial.println("  • set key <api-key>     - установить API-ключ Gemini");
             Serial.println("  • set ssid <имя_сети>   - установить имя Wi-Fi");
             Serial.println("  • set pass <пароль>     - установить пароль Wi-Fi");
             Serial.println("  • set prompt <текст>    - задать системный промпт");
             Serial.println("  • set temp <0.0-2.0>    - задать температуру ответа");
-            Serial.println("  • set tokens <число>    - задать максимальное число токенов");
+            Serial.println("  • set tokens <число>    - задать максимальное число токенов ответа");
             Serial.println("  • set dns <ip1> [ip2]   - задать Smart DNS серверы");
             return; 
         }
         String param = argv[1]; String val = argv[2];
-        if (param == "ssid") { _configMgr.setWifi(val, _configMgr.getConfig().wifiPassword); Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", _configMgr.getConfig().wifiSsid.c_str()); }
+        if (param == "limit" || param == "quota") { 
+            _usageTracker.setDailyLimit(val.toInt()); 
+            Serial.printf("[ОК] Суточный лимит запросов установлен: %u (0 = безлимитно)\n", (unsigned int)val.toInt()); 
+        }
+        else if (param == "ssid") { _configMgr.setWifi(val, _configMgr.getConfig().wifiPassword); Serial.printf("[ОК] Wi-Fi SSID установлен: '%s'\n", _configMgr.getConfig().wifiSsid.c_str()); }
         else if (param == "pass") { _configMgr.setWifi(_configMgr.getConfig().wifiSsid, val); Serial.println("[ОК] Пароль Wi-Fi установлен."); }
         else if (param == "key") { _configMgr.setApiKey(val); _configMgr.save(); Serial.println("[ОК] API-ключ сохранен."); }
         else if (param == "model") { applyModel(val); }
@@ -381,15 +413,15 @@ void SerialCLI::registerCommands() {
     addCommand("model", "Показать или переключить активную модель (model [№|id])", "Google AI", [this, applyModel](int argc, String argv[]) { 
         if (argc < 2) {
             Serial.printf(ANSI_CYAN "\n[AI] Текущая активная модель: " ANSI_BOLD "%s" ANSI_RESET "\n", _configMgr.getConfig().model.c_str());
-            Serial.println("  • 'models'           - показать таблицу всех доступных моделей с номерами");
-            Serial.println("  • 'model <№>'        - переключить модель по номеру (например: 'model 1')");
+            Serial.println("  • 'models'           - показать таблицу всех доступных моделей с номерами и лимитами");
+            Serial.println("  • 'model <№>'        - переключить модель по номеру (например: 'model 24')");
             Serial.println("  • 'model <id>'       - переключить по имени (например: 'model gemini-3.5-flash-lite')");
             Serial.println("  • 'setup model'      - интерактивный выбор модели\n");
             return;
         }
         applyModel(argv[1]);
     });
-    addCommand("models", "Таблица всех доступных моделей с номерами", "Google AI", [this](int argc, String argv[]) { _geminiClient.listAvailableModels(); });
+    addCommand("models", "Таблица всех доступных моделей с номерами и лимитами", "Google AI", [this](int argc, String argv[]) { _geminiClient.listAvailableModels(); });
     addCommand("test", "Тест подключения к Gemini", "Google AI", [this](int argc, String argv[]) { _geminiClient.testConnection(); });
     addCommand("demo", "Демонстрация интеграции", "Google AI", [this](int argc, String argv[]) {
         if (argc >= 2 && argv[1] == "automation") {
@@ -406,12 +438,32 @@ void SerialCLI::registerCommands() {
         String prompt = ""; for (int i = 1; i < argc; ++i) prompt += argv[i] + (i < argc - 1 ? " " : "");
         if (!_netMgr.isConnected()) { Serial.println(ANSI_RED "[ОШИБКА] Нет подключения к Wi-Fi!" ANSI_RESET); return; }
         if (_configMgr.getConfig().apiKey.isEmpty()) { Serial.println(ANSI_RED "[ОШИБКА] Не задан API-ключ Gemini!" ANSI_RESET); return; }
+        
+        if (_usageTracker.isLimitReached()) {
+            DailyUsageStats st = _usageTracker.getStats();
+            Serial.printf(ANSI_RED "\n[ОШИБКА] Суточный лимит запросов (%u) исчерпан!\n" ANSI_RESET, st.dailyRequestLimit);
+            Serial.printf("Сброс лимита через: %s (в 00:00 по времени устройства: %s).\n", 
+                          _usageTracker.getTimeUntilMidnight().c_str(), _usageTracker.getCurrentTimeString().c_str());
+            Serial.println("Для изменения лимита введите: 'set limit <число>' или 'set limit 0' (безлимит).\n");
+            return;
+        }
+
         Serial.printf(ANSI_CYAN "\n[Gemini AI] Отправка запроса к модели %s...\n" ANSI_RESET, _configMgr.getConfig().model.c_str());
         GeminiResponse res = _geminiClient.ask(prompt);
         if (res.success) { 
+            _usageTracker.recordRequest(res.promptTokens, res.candidateTokens, res.totalTokens);
+            DailyUsageStats st = _usageTracker.getStats();
+            int remaining = (st.dailyRequestLimit > 0) ? ((int)st.dailyRequestLimit - (int)st.requestsToday) : -1;
+            if (remaining < 0 && st.dailyRequestLimit > 0) remaining = 0;
+
             Serial.println(res.text); 
-            Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d (Запрос: %d, Ответ: %d | Лимит: %d)\n\n" ANSI_RESET, 
-                          res.durationMs, res.totalTokens, res.promptTokens, res.candidateTokens, _configMgr.getConfig().maxTokens); 
+            if (st.dailyRequestLimit > 0) {
+                Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d (Запрос: %d, Ответ: %d) | Запросов сегодня: %u/%u (Осталось: %d)\n\n" ANSI_RESET, 
+                              res.durationMs, res.totalTokens, res.promptTokens, res.candidateTokens, st.requestsToday, st.dailyRequestLimit, remaining); 
+            } else {
+                Serial.printf(ANSI_YELLOW "\n[Статистика] Время: %lu мс | Токены: %d (Запрос: %d, Ответ: %d) | Запросов сегодня: %u\n\n" ANSI_RESET, 
+                              res.durationMs, res.totalTokens, res.promptTokens, res.candidateTokens, st.requestsToday); 
+            }
         } else { 
             Serial.printf(ANSI_RED "[ОШИБКА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode); 
         }
@@ -618,8 +670,30 @@ void SerialCLI::runSelfTest() {
         assertTest("Парсинг ошибки Google API (INVALID_ARGUMENT)", !ok && !resp.success && resp.text.indexOf("API key not valid") >= 0);
     }
 
-    // 4. Интеграционные тесты (сеть и реальный API)
-    Serial.println(ANSI_CYAN "\n--- 4. Интеграционная проверка (Hardware & Live API) ---" ANSI_RESET);
+    // 4. Тесты UsageTracker (квоты и суточные лимиты)
+    Serial.println(ANSI_CYAN "\n--- 4. Тесты менеджера суточных лимитов и квот (UsageTracker) ---" ANSI_RESET);
+    {
+        UsageTracker tracker;
+        tracker.setDailyLimit(10);
+        tracker.resetDailyUsage();
+        DailyUsageStats s = tracker.getStats();
+        assertTest("Сброс суточных счетчиков", s.requestsToday == 0 && s.totalTokensToday == 0);
+        assertTest("Установка суточного лимита", s.dailyRequestLimit == 10);
+        assertTest("Проверка лимита при нулевом расходе (isLimitReached == false)", !tracker.isLimitReached());
+
+        tracker.recordRequest(15, 35, 50);
+        s = tracker.getStats();
+        assertTest("Регистрация расхода токенов и запроса", s.requestsToday == 1 && s.promptTokensToday == 15 && s.responseTokensToday == 35 && s.totalTokensToday == 50);
+
+        tracker.setDailyLimit(1);
+        assertTest("Срабатывание суточного лимита (isLimitReached == true)", tracker.isLimitReached());
+
+        tracker.setDailyLimit(1500);
+        assertTest("Восстановление лимита (1500 RPD)", tracker.getStats().dailyRequestLimit == 1500 && !tracker.isLimitReached());
+    }
+
+    // 5. Интеграционные тесты (сеть и реальный API)
+    Serial.println(ANSI_CYAN "\n--- 5. Интеграционная проверка (Hardware & Live API) ---" ANSI_RESET);
     {
         bool wifiOk = _netMgr.isConnected();
         assertTest("Статус подключения к Wi-Fi сети", wifiOk);

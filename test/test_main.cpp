@@ -8,20 +8,25 @@
 #include "NetworkManager.h"
 #include "GeminiClient.h"
 
+#include "UsageTracker.h"
+
 ConfigManager* cfg;
 NetworkManager* net;
 GeminiClient* gem;
+UsageTracker* usage;
 SerialCLI* cli;
 
 void setUp(void) {
     cfg = new ConfigManager();
     net = new NetworkManager(*cfg);
     gem = new GeminiClient(*cfg);
-    cli = new SerialCLI(*cfg, *net, *gem);
+    usage = new UsageTracker();
+    cli = new SerialCLI(*cfg, *net, *gem, *usage);
 }
 
 void tearDown(void) {
     delete cli;
+    delete usage;
     delete gem;
     delete net;
     delete cfg;
@@ -157,6 +162,30 @@ void test_gemini_http_error_descriptions(void) {
     TEST_ASSERT_TRUE(GeminiClient::getHttpErrorDescription(429).indexOf("Превышен лимит") >= 0);
 }
 
+// 4. Тесты UsageTracker (квоты и суточные лимиты)
+void test_usage_tracker_limits_and_reset(void) {
+    usage->setDailyLimit(10);
+    usage->resetDailyUsage();
+    DailyUsageStats s = usage->getStats();
+    TEST_ASSERT_EQUAL(0, s.requestsToday);
+    TEST_ASSERT_EQUAL(0, s.totalTokensToday);
+    TEST_ASSERT_EQUAL(10, s.dailyRequestLimit);
+    TEST_ASSERT_FALSE(usage->isLimitReached());
+
+    usage->recordRequest(20, 80, 100);
+    s = usage->getStats();
+    TEST_ASSERT_EQUAL(1, s.requestsToday);
+    TEST_ASSERT_EQUAL(20, s.promptTokensToday);
+    TEST_ASSERT_EQUAL(80, s.responseTokensToday);
+    TEST_ASSERT_EQUAL(100, s.totalTokensToday);
+
+    usage->setDailyLimit(1);
+    TEST_ASSERT_TRUE(usage->isLimitReached());
+
+    usage->setDailyLimit(1500);
+    TEST_ASSERT_FALSE(usage->isLimitReached());
+}
+
 void setup() {
     delay(2000);
     UNITY_BEGIN();
@@ -180,6 +209,9 @@ void setup() {
     RUN_TEST(test_gemini_parse_success_response);
     RUN_TEST(test_gemini_parse_error_response);
     RUN_TEST(test_gemini_http_error_descriptions);
+
+    // UsageTracker Tests
+    RUN_TEST(test_usage_tracker_limits_and_reset);
 
     UNITY_END();
 }

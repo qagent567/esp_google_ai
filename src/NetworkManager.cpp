@@ -98,6 +98,9 @@ bool NetworkManager::connect() {
         // Применяем Smart DNS после получения сетевых настроек от DHCP
         applyCustomDNS();
         
+        // Запуск синхронизации времени по протоколу NTP (UTC+3 для Московского времени)
+        configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+
         Serial.println(F("[Wi-Fi] Успешно подключено!"));
         Serial.printf("[Wi-Fi] Получен IP: %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("[Wi-Fi] Уровень сигнала: %d dBm\n", WiFi.RSSI());
