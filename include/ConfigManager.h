@@ -16,6 +16,7 @@ struct AppConfig {
     String systemPrompt;    // Системный промпт (инструкция роли)
     int maxTokens;          // Максимальное количество токенов в ответе
     float temperature;      // Температура генерации (0.0 - 2.0)
+    bool isConfigured;      // Флаг сохранения корректной конфигурации
 };
 
 /**

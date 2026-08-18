@@ -35,6 +35,7 @@ void ConfigManager::resetToDefaults() {
     _config.systemPrompt = DEFAULT_SYSTEM_PROMPT;
     _config.maxTokens = DEFAULT_MAX_TOKENS;
     _config.temperature = DEFAULT_TEMPERATURE;
+    _config.isConfigured = false;
 }
 
 void ConfigManager::load() {
@@ -47,6 +48,7 @@ void ConfigManager::load() {
     _config.systemPrompt = _prefs.getString("prompt", DEFAULT_SYSTEM_PROMPT);
     _config.maxTokens = _prefs.getInt("max_tokens", DEFAULT_MAX_TOKENS);
     _config.temperature = _prefs.getFloat("temp", DEFAULT_TEMPERATURE);
+    _config.isConfigured = _prefs.getBool("configured", false);
 
     // Валидация значений по умолчанию
     if (_config.model.isEmpty()) _config.model = DEFAULT_MODEL;
@@ -58,6 +60,8 @@ void ConfigManager::load() {
 
 bool ConfigManager::save() {
     bool ok = true;
+    _config.isConfigured = (!_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
+
     ok &= (_prefs.putString("ssid", _config.wifiSsid) > 0 || _config.wifiSsid.isEmpty());
     ok &= (_prefs.putString("pass", _config.wifiPassword) > 0 || _config.wifiPassword.isEmpty());
     ok &= (_prefs.putString("api_key", _config.apiKey) > 0 || _config.apiKey.isEmpty());
@@ -67,6 +71,7 @@ bool ConfigManager::save() {
     ok &= (_prefs.putString("prompt", _config.systemPrompt) > 0);
     ok &= (_prefs.putInt("max_tokens", _config.maxTokens) > 0);
     ok &= (_prefs.putFloat("temp", _config.temperature) > 0);
+    ok &= _prefs.putBool("configured", _config.isConfigured);
 
     if (ok) {
         Serial.println(F("[УСПЕХ] Настройки успешно сохранены в NVS память!"));
@@ -77,7 +82,7 @@ bool ConfigManager::save() {
 }
 
 bool ConfigManager::isConfigured() const {
-    return (!_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
+    return (_config.isConfigured && !_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
 }
 
 void ConfigManager::setWifi(const String& ssid, const String& password) {

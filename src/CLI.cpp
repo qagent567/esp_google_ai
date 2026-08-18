@@ -9,10 +9,13 @@ void SerialCLI::begin() {
     printWelcome();
     
     if (!_configMgr.isConfigured()) {
-        Serial.println(F("\n[!] Устройство не настроено. Запустите мастер настройки 'wizard' или настройте параметры вручную (см. 'help')."));
+        Serial.println(F("\n[!] Устройство еще не настроено (нет сохраненных параметров Wi-Fi и API ключа)."));
+        Serial.println(F("[!] Автоматический запуск мастера первоначальной настройки...\n"));
+        startWizard(WizardType::FULL);
+    } else {
+        Serial.println(F("\n[СИСТЕМА] Настройки загружены из памяти. Система готова к работе."));
+        printPrompt();
     }
-    
-    printPrompt();
 }
 
 void SerialCLI::printWelcome() {
@@ -356,6 +359,10 @@ void SerialCLI::update() {
                 Serial.println();
                 handleCommand(_inputBuffer);
                 _inputBuffer = "";
+                printPrompt();
+            } else if (_currentWizard == WizardType::NONE) {
+                // Если нажат пустой Enter (например, при подключении монитора порта)
+                Serial.println();
                 printPrompt();
             }
         }
