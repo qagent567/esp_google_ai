@@ -54,6 +54,7 @@ void SerialCLI::printHelp() {
     Serial.println(F("   disconnect               - Отключиться от Wi-Fi"));
     Serial.println(F(""));
     Serial.println(F(" Настройки Google AI (Gemini):"));
+    Serial.println(F("   models                   - Сканировать и вывести список доступных моделей Gemini"));
     Serial.println(F("   set key <api_key>        - Установить API-ключ Google AI Studio"));
     Serial.println(F("   set model <имя_модели>   - Сменить модель (по умолчанию: gemini-2.0-flash)"));
     Serial.println(F("   set prompt <текст>       - Задать системный промпт (роль ассистента)"));
@@ -229,6 +230,8 @@ void SerialCLI::handleCommand(String line) {
         ESP.restart();
     } else if (lower == "test") {
         _geminiClient.testConnection();
+    } else if (lower == "models" || lower == "scan models" || lower == "list models") {
+        _geminiClient.listAvailableModels();
     } else if (lower == "demo automation") {
         Serial.println(F("[DEMO] Демонстрация работы AI в программном коде ESP32..."));
         Serial.println(F("[DEMO] Имитация чтения датчика (Температура: 35.5 C)..."));

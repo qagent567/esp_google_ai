@@ -171,6 +171,116 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     return result;
 }
 
+bool GeminiClient::listAvailableModels() {
+    const AppConfig& cfg = _configMgr.getConfig();
+
+    if (cfg.apiKey.isEmpty()) {
+        Serial.println(F("[ОШИБКА] API-ключ Gemini не настроен! Задайте его командой 'set key <api_key>'."));
+        return false;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println(F("[ОШИБКА] Нет подключения к Wi-Fi сети!"));
+        return false;
+    }
+
+    Serial.println(F("\n[AI] Запрос списка доступных моделей с Google AI Studio..."));
+    
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(20);
+
+    HTTPClient http;
+    String url = "https://generativelanguage.googleapis.com/v1beta/models?key=" + cfg.apiKey;
+    
+    if (!http.begin(client, url)) {
+        Serial.println(F("[ОШИБКА] Не удалось инициализировать HTTPS соединение."));
+        return false;
+    }
+
+    http.setTimeout(20000);
+    int httpCode = http.GET();
+
+    if (httpCode == 200) {
+        String payload = http.getString();
+        
+        // Создаем фильтр для оптимизации расхода RAM
+        JsonDocument filter;
+        filter["models"][0]["name"] = true;
+        filter["models"][0]["displayName"] = true;
+        filter["models"][0]["supportedGenerationMethods"] = true;
+        filter["error"]["message"] = true;
+
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
+        if (err) {
+            Serial.printf("[ОШИБКА] Не удалось разобрать JSON списка моделей: %s\n", err.c_str());
+            http.end();
+            return false;
+        }
+
+        if (doc["error"]) {
+            Serial.printf("[ОШИБКА API] %s\n", doc["error"]["message"] | "Неизвестная ошибка");
+            http.end();
+            return false;
+        }
+
+        JsonArray models = doc["models"].as<JsonArray>();
+        if (models.isNull() || models.size() == 0) {
+            Serial.println(F("[AI] Список моделей пуст."));
+            http.end();
+            return false;
+        }
+
+        Serial.println(F("\n================= ДОСТУПНЫЕ МОДЕЛИ GEMINI ================="));
+        Serial.println(F(" ID Модели (для 'set model <id>') | Отображаемое имя"));
+        Serial.println(F("------------------------------------------------------------"));
+
+        int count = 0;
+        for (JsonObject m : models) {
+            const char* fullName = m["name"] | "";
+            const char* dispName = m["displayName"] | "";
+            
+            // Проверяем, поддерживает ли модель генерацию контента
+            bool supportsGen = false;
+            JsonArray methods = m["supportedGenerationMethods"];
+            for (const char* method : methods) {
+                if (method && strcmp(method, "generateContent") == 0) {
+                    supportsGen = true;
+                    break;
+                }
+            }
+
+            if (!supportsGen) continue;
+
+            // Убираем префикс "models/"
+            String modelId = fullName;
+            if (modelId.startsWith("models/")) {
+                modelId = modelId.substring(7);
+            }
+
+            count++;
+            bool isActive = (modelId.equalsIgnoreCase(cfg.model));
+            if (isActive) {
+                Serial.printf(" [*] %-28s | %s (АКТИВНА)\n", modelId.c_str(), dispName);
+            } else {
+                Serial.printf("     %-28s | %s\n", modelId.c_str(), dispName);
+            }
+        }
+        Serial.println(F("============================================================"));
+        Serial.printf("Всего поддерживаемых моделей: %d\n", count);
+        Serial.printf("Текущая активная модель: %s\n\n", cfg.model.c_str());
+
+        http.end();
+        return true;
+    } else {
+        Serial.printf("[ОШИБКА] Не удалось получить список моделей. HTTP Код: %d (%s)\n", 
+                      httpCode, getHttpErrorDescription(httpCode).c_str());
+        http.end();
+        return false;
+    }
+}
+
 bool GeminiClient::testConnection() {
     Serial.println(F("[Тест] Проверка связи с Google Generative Language API..."));
     GeminiResponse res = ask("Ответь одним словом: 'РАБОТАЕТ'");

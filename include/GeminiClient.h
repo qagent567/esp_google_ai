@@ -27,6 +27,9 @@ public:
     // Отправка текстового запроса (промпта) к Gemini
     GeminiResponse ask(const String& prompt);
 
+    // Получение и вывод списка доступных моделей через API
+    bool listAvailableModels();
+
     // Проверка доступности хоста API (DNS резолвинг и TLS пинг)
     bool testConnection();
 

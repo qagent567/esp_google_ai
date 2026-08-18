@@ -50,6 +50,7 @@ Google AI Studio API (`generativelanguage.googleapis.com`) блокирует п
 | `wizard` | Запустить пошаговый мастер полной настройки (Wi-Fi + API Key) |
 | `setup wifi` | Интерактивная настройка только Wi-Fi |
 | `setup ai` | Интерактивная настройка только параметров нейросети |
+| `models` / `scan models` | Сканировать и вывести список доступных моделей Gemini через API |
 | `demo automation` | Демонстрация использования Gemini AI в программном коде ESP32 |
 | `set ssid <имя_сети>` | Установить SSID точки доступа Wi-Fi вручную |
 | `set pass <пароль>` | Установить пароль от Wi-Fi сети вручную |
