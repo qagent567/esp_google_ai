@@ -281,7 +281,11 @@ void SerialCLI::registerCommands() {
         else Serial.println("Неизвестный параметр. Доступно: wifi, ai");
     });
     addCommand("scan", "Сканировать сети Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.scanNetworks(); });
-    addCommand("connect", "Подключиться к Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.connect(); });
+    addCommand("connect", "Подключиться к Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { 
+        if (_netMgr.connect()) {
+            _configMgr.save();
+        }
+    });
     addCommand("disconnect", "Отключиться от Wi-Fi", "Wi-Fi", [this](int argc, String argv[]) { _netMgr.disconnect(); });
     addCommand("set", "Изменить настройку (set ssid, pass, key, model, prompt, tokens, temp, dns)", "Конфигурация", [this](int argc, String argv[]) {
         if (argc < 3) { Serial.println("Использование: set <параметр> <значение>"); return; }
