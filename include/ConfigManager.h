@@ -8,7 +8,7 @@
  */
 struct AppConfig {
     String wifiSsid;        // SSID точки доступа Wi-Fi (сохраняется во Flash)
-    String wifiPassword;    // Пароль от Wi-Fi (хранится только в RAM до перезагрузки)
+    String wifiPassword;    // Пароль от Wi-Fi (сохраняется во Flash после успешного подключения)
     String apiKey;          // API-ключ Google AI Studio (сохраняется во Flash)
     String model;           // Название модели Gemini (сохраняется во Flash)
     String dnsPrimary;      // Основной Smart DNS (xbox-dns.ru: 111.88.96.50)

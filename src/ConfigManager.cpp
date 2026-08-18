@@ -40,9 +40,7 @@ void ConfigManager::resetToDefaults() {
 
 void ConfigManager::load() {
     _config.wifiSsid = _prefs.getString("ssid", "");
-    _config.wifiPassword = ""; // Пароль намеренно НЕ читается из Flash (только RAM до перезагрузки)
-    _prefs.remove("pass");     // Удаляем пароль из NVS, если он был записан ранее
-
+    _config.wifiPassword = _prefs.getString("pass", "");
     _config.apiKey = _prefs.getString("api_key", "");
     _config.model = _prefs.getString("model", DEFAULT_MODEL);
     _config.dnsPrimary = _prefs.getString("dns1", DEFAULT_DNS_PRIMARY);
@@ -65,7 +63,7 @@ bool ConfigManager::save() {
     _config.isConfigured = (!_config.wifiSsid.isEmpty() && !_config.apiKey.isEmpty());
 
     ok &= (_prefs.putString("ssid", _config.wifiSsid) > 0 || _config.wifiSsid.isEmpty());
-    _prefs.remove("pass"); // Пароль не сохраняется в NVS Flash
+    ok &= (_prefs.putString("pass", _config.wifiPassword) > 0 || _config.wifiPassword.isEmpty());
     ok &= (_prefs.putString("api_key", _config.apiKey) > 0 || _config.apiKey.isEmpty());
     ok &= (_prefs.putString("model", _config.model) > 0);
     ok &= (_prefs.putString("dns1", _config.dnsPrimary) > 0);
@@ -76,7 +74,7 @@ bool ConfigManager::save() {
     ok &= _prefs.putBool("configured", _config.isConfigured);
 
     if (ok) {
-        Serial.println(F("[УСПЕХ] Параметры сохранены в NVS (пароль Wi-Fi хранится в RAM до перезагрузки)."));
+        Serial.println(F("[УСПЕХ] Параметры и пароль Wi-Fi сохранены в NVS Flash."));
     } else {
         Serial.println(F("[ПРЕДУПРЕЖДЕНИЕ] Некоторые параметры не удалось записать в NVS."));
     }

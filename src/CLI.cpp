@@ -20,8 +20,9 @@ void SerialCLI::begin() {
     if (_configMgr.hasSavedConfig()) {
         Serial.printf("\n" ANSI_GREEN "[СИСТЕМА] Найдена сохраненная конфигурация (Сеть: '%s', API-ключ настроен)." ANSI_RESET "\n", 
                       _configMgr.getConfig().wifiSsid.c_str());
-        Serial.println(ANSI_YELLOW "[СИСТЕМА] Пароль Wi-Fi хранится только в RAM до перезагрузки платы." ANSI_RESET);
-        startWizard(WizardType::PASSWORD_PROMPT);
+        Serial.println(ANSI_CYAN "[СИСТЕМА] Автоматическое подключение к Wi-Fi..." ANSI_RESET);
+        _netMgr.connect();
+        printPrompt();
     } else {
         Serial.println(ANSI_RED "\n[!] Устройство еще не настроено (нет сохраненной конфигурации)." ANSI_RESET);
         Serial.println(ANSI_RED "[!] Автоматический запуск мастера первоначальной настройки...\n" ANSI_RESET);
@@ -183,7 +184,7 @@ void SerialCLI::handleWizardStep(const String& input) {
             Serial.println("\n[WIZARD] Проверка подключения к Wi-Fi перед сохранением...");
             if (_netMgr.connect()) {
                 _configMgr.save();
-                Serial.println(ANSI_GREEN "[УСПЕХ] Конфигурация успешно сохранена в NVS (пароль в RAM до перезагрузки)!" ANSI_RESET);
+                Serial.println(ANSI_GREEN "[УСПЕХ] Конфигурация и Wi-Fi успешно сохранены в NVS Flash!" ANSI_RESET);
             } else {
                 Serial.println(ANSI_YELLOW "[ВНИМАНИЕ] Не удалось подключиться к сети. Параметры НЕ сохранены во Flash." ANSI_RESET);
             }
