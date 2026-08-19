@@ -49,6 +49,10 @@ void setup() {
         Serial.println(F("[СИСТЕМА] Предупреждение: Сбой инициализации NVS!"));
     }
 
+    // Инициализация аппаратного контроллера с системным контекстом
+    hardwareController.begin();
+    hardwareController.setSystemContext(&configManager, &networkManager, &usageTracker);
+
     // Инициализация сетевого интерфейса
     networkManager.begin();
 

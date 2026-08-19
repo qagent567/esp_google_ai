@@ -559,6 +559,73 @@ void SerialCLI::registerCommands() {
             Serial.printf(ANSI_RED "[ОШИБКА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode); 
         }
     });
+
+    addCommand("agent", "Запустить автономного ИИ-агента для выполнения задачи", "Google AI", [this](int argc, String argv[]) {
+        if (argc < 2) {
+            Serial.println("Использование: agent \"ваша комплексная задача для платы\"");
+            Serial.println("Пример: agent \"Просканируй I2C, замерь ADC на 34 пине и если меньше 1.5В включи пин 2\"");
+            return;
+        }
+        String prompt = "";
+        for (int i = 1; i < argc; ++i) prompt += argv[i] + (i < argc - 1 ? " " : "");
+        if (!_netMgr.isConnected()) { Serial.println(ANSI_RED "[ОШИБКА] Нет подключения к Wi-Fi!" ANSI_RESET); return; }
+        if (_configMgr.getConfig().apiKey.isEmpty()) { Serial.println(ANSI_RED "[ОШИБКА] Не задан API-ключ Gemini!" ANSI_RESET); return; }
+
+        Serial.printf(ANSI_CYAN "\n[АВТОНОМНЫЙ АГЕНТ] Запуск решения задачи через %s...\n" ANSI_RESET, _configMgr.getConfig().model.c_str());
+        GeminiResponse res = _geminiClient.askAgent(prompt, 3);
+        if (res.success) {
+            Serial.println(ANSI_GREEN "\n[ИТОГОВОЕ ЗАКЛЮЧЕНИЕ АГЕНТА]:" ANSI_RESET);
+            Serial.println(res.text);
+            Serial.printf(ANSI_YELLOW "\n[Агент Статистика] Шагов выполнено: %d | Время: %lu мс | Токенов: %d\n\n" ANSI_RESET,
+                          res.agentStepsExecuted, res.durationMs, res.totalTokens);
+        } else {
+            Serial.printf(ANSI_RED "[ОШИБКА АГЕНТА] %s (HTTP: %d)\n\n" ANSI_RESET, res.text.c_str(), res.httpCode);
+        }
+    });
+
+    addCommand("diagnose", "Полная самодиагностика памяти, температуры, Wi-Fi и железа", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        Serial.println(_hwController.selfDiagnose());
+    });
+
+    addCommand("scan", "Сканирование (scan wifi | scan i2c)", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        if (argc >= 2 && argv[1] == "wifi") {
+            Serial.println(_hwController.scanWiFi());
+        } else if (argc >= 2 && (argv[1] == "i2c" || argv[1] == "wire")) {
+            uint8_t sda = (argc >= 3) ? argv[2].toInt() : 21;
+            uint8_t scl = (argc >= 4) ? argv[3].toInt() : 22;
+            Serial.println(_hwController.scanI2C(sda, scl));
+        } else {
+            Serial.println("Использование: scan wifi или scan i2c [sda] [scl]");
+        }
+    });
+
+    addCommand("pwm", "Управление ШИМ (pwm <pin> <duty 0..255>)", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        if (argc < 3) { Serial.println("Использование: pwm <pin> <duty 0-255>"); return; }
+        uint8_t pin = argv[1].toInt();
+        uint32_t duty = argv[2].toInt();
+        if (_hwController.setPWM(pin, duty)) {
+            Serial.printf("[ШИМ] GPIO %u установлен: скважность %u/255 (%.1f%%)\n", pin, duty, (duty / 255.0f) * 100.0f);
+        } else {
+            Serial.printf("[ОШИБКА] Не удалось установить ШИМ на GPIO %u (пин не разрешен)\n", pin);
+        }
+    });
+
+    addCommand("tone", "Воспроизвести звук (tone <pin> <freq_hz> [duration_ms])", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        if (argc < 3) { Serial.println("Использование: tone <pin> <freq_hz> [duration_ms]"); return; }
+        uint8_t pin = argv[1].toInt();
+        unsigned int freq = argv[2].toInt();
+        unsigned long dur = (argc >= 4) ? argv[3].toInt() : 200;
+        if (_hwController.playTone(pin, freq, dur)) {
+            Serial.printf("[ТОН] Воспроизведение %u Гц на GPIO %u (%lu мс)\n", freq, pin, dur);
+        } else {
+            Serial.printf("[ОШИБКА] Пин GPIO %u недоступен для звука.\n", pin);
+        }
+    });
+
+    addCommand("readall", "Считать состояние всех разрешенных пинов платы", "Железо & Сенсоры", [this](int argc, String argv[]) {
+        Serial.println(_hwController.readAllAllowedPins());
+    });
+
     addCommand("selftest", "Запустить автоматический набор тестов прошивки", "Система", [this](int argc, String argv[]) { runSelfTest(); });
 }
 

@@ -10,20 +10,21 @@
  * @brief Результат выполнения запроса к Gemini API
  */
 struct GeminiResponse {
-    bool success;           // Флаг успешности
-    int httpCode;           // HTTP статус-код (200, 400, 403, 500 и т.д.)
-    String text;            // Текст ответа нейросети или текст ошибки
-    int promptTokens;       // Токенов во входящем запросе
-    int candidateTokens;    // Токенов в ответе нейросети
-    int totalTokens;        // Суммарно использовано токенов
+    bool success;             // Флаг успешности
+    int httpCode;             // HTTP статус-код (200, 400, 403, 500 и т.д.)
+    String text;              // Текст ответа нейросети или текст ошибки
+    int promptTokens;         // Токенов во входящем запросе
+    int candidateTokens;      // Токенов в ответе нейросети
+    int totalTokens;          // Суммарно использовано токенов
     unsigned long durationMs; // Время выполнения запроса в миллисекундах
+    int agentStepsExecuted;   // Количество автономных агентных шагов
 };
 
 class UsageTracker;
 class HardwareController;
 
 /**
- * @brief Клиент для взаимодействия с Google AI Studio (Gemini API)
+ * @brief Клиент для взаимодействия с Google AI Studio (Gemini API) с поддержкой автономного агентного цикла
  */
 class GeminiClient {
 public:
@@ -36,8 +37,11 @@ public:
     // Определение суточного лимита модели (RPD)
     static uint32_t getModelDailyLimit(const String& modelId);
 
-    // Отправка текстового запроса (промпта) к Gemini (с авто-повтором при сбоях и обработкой аппаратных действий)
+    // Отправка текстового запроса (промпта) к Gemini (с авто-повтором и автономным агентным контуром)
     GeminiResponse ask(const String& prompt);
+
+    // Автономный многошаговый агентный запрос (ReAct: Thought -> Action -> Observation -> Final Answer)
+    GeminiResponse askAgent(const String& goalPrompt, int maxSteps = 3);
 
     // Получение и вывод списка доступных моделей через API
     bool listAvailableModels();
@@ -55,11 +59,14 @@ public:
     // Формирование URL эндпоинта
     String buildApiUrl() const;
 
-    // Формирование JSON полезной нагрузки
-    String buildRequestBody(const String& prompt) const;
+    // Формирование JSON полезной нагрузки с историей шагов
+    String buildRequestBody(const String& prompt, const String& conversationContext = "") const;
 
     // Парсинг JSON ответа от Google API с оптимизацией памяти
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
+
+    // Извлечение и исполнение аппаратного действия
+    bool extractAndExecuteAction(const String& responseText, String& actionResult);
 
     // Проверка и выполнение аппаратных действий (actions) в ответе модели
     void processHardwareActions(GeminiResponse& response);
@@ -79,5 +86,7 @@ private:
     UsageTracker* _usageTracker;
     HardwareController* _hwController;
     std::vector<String> _cachedModels;
-};
 
+    // Внутренний низкоуровневый HTTPS POST запрос к Gemini API
+    GeminiResponse sendRawRequest(const String& requestBody);
+};

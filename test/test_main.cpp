@@ -27,6 +27,7 @@ void setUp(void) {
     net = new NetworkManager(*cfg);
     usage = new UsageTracker();
     hw = new HardwareController();
+    hw->setSystemContext(cfg, net, usage);
     gem = new GeminiClient(*cfg, usage, hw);
     cli = new SerialCLI(*cfg, *net, *gem, *usage, *hw);
 }

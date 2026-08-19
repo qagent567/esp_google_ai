@@ -63,13 +63,22 @@ String GeminiClient::buildApiUrl() const {
     return String(urlBuf);
 }
 
-String GeminiClient::buildRequestBody(const String& prompt) const {
+String GeminiClient::buildRequestBody(const String& prompt, const String& conversationContext) const {
     const AppConfig& cfg = _configMgr.getConfig();
 
     JsonDocument doc;
 
-    // Массив contents (сообщение пользователя)
+    // Массив contents (сообщение пользователя или история агентных шагов)
     JsonArray contents = doc["contents"].to<JsonArray>();
+    
+    if (!conversationContext.isEmpty()) {
+        JsonObject ctxMsg = contents.add<JsonObject>();
+        ctxMsg["role"] = "user";
+        JsonArray ctxParts = ctxMsg["parts"].to<JsonArray>();
+        JsonObject ctxText = ctxParts.add<JsonObject>();
+        ctxText["text"] = conversationContext;
+    }
+
     JsonObject userMsg = contents.add<JsonObject>();
     userMsg["role"] = "user";
     JsonArray parts = userMsg["parts"].to<JsonArray>();
@@ -108,7 +117,6 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     }
 
     JsonDocument doc;
-    // Парсим с фильтром для надежности и экономии оперативной памяти ESP32
     JsonDocument filter;
     filter["candidates"][0]["content"]["parts"][0]["text"] = true;
     filter["candidates"][0]["finishReason"] = true;
@@ -121,7 +129,6 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
 
     DeserializationError err = deserializeJson(doc, jsonPayload, DeserializationOption::Filter(filter));
     if (err) {
-        // Если фильтр не сработал (например, нестандартный JSON), пробуем прямой парсинг
         err = deserializeJson(doc, jsonPayload);
         if (err) {
             response.success = false;
@@ -160,7 +167,6 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
             }
         }
         
-        // Если нет текста, проверяем finishReason
         const char* finishReason = cand["finishReason"];
         if (finishReason != nullptr) {
             response.success = false;
@@ -178,30 +184,39 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     return false;
 }
 
-void GeminiClient::processHardwareActions(GeminiResponse& response) {
-    if (!response.success || _hwController == nullptr || response.text.isEmpty()) return;
+bool GeminiClient::extractAndExecuteAction(const String& responseText, String& actionResult) {
+    if (_hwController == nullptr || responseText.isEmpty()) return false;
 
     int startPos = -1;
     int endPos = -1;
 
-    int actIdx = response.text.indexOf("```action");
+    int actIdx = responseText.indexOf("```action");
     if (actIdx >= 0) {
-        startPos = response.text.indexOf('{', actIdx);
+        startPos = responseText.indexOf('{', actIdx);
         if (startPos >= 0) {
-            endPos = response.text.indexOf('}', startPos);
+            endPos = responseText.indexOf('}', startPos);
         }
     } else {
-        int jsonIdx = response.text.indexOf("{\"action\"");
-        if (jsonIdx < 0) jsonIdx = response.text.indexOf("{\"action\":");
+        int jsonIdx = responseText.indexOf("{\"action\"");
+        if (jsonIdx < 0) jsonIdx = responseText.indexOf("{\"action\":");
         if (jsonIdx >= 0) {
             startPos = jsonIdx;
-            endPos = response.text.indexOf('}', startPos);
+            endPos = responseText.indexOf('}', startPos);
         }
     }
 
     if (startPos >= 0 && endPos > startPos) {
-        String actionJson = response.text.substring(startPos, endPos + 1);
-        String actionResult = _hwController->executeActionJson(actionJson);
+        String actionJson = responseText.substring(startPos, endPos + 1);
+        actionResult = _hwController->executeActionJson(actionJson);
+        return true;
+    }
+
+    return false;
+}
+
+void GeminiClient::processHardwareActions(GeminiResponse& response) {
+    String actionResult;
+    if (extractAndExecuteAction(response.text, actionResult)) {
         response.text += "\n\n[Выполнение на ESP32]: ";
         response.text += actionResult;
     }
@@ -226,30 +241,18 @@ String GeminiClient::getHttpErrorDescription(int httpCode) {
     }
 }
 
-GeminiResponse GeminiClient::ask(const String& prompt) {
+GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
     GeminiResponse result;
     result.success = false;
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+    result.agentStepsExecuted = 0;
 
     const AppConfig& cfg = _configMgr.getConfig();
-
-    if (cfg.apiKey.isEmpty()) {
-        result.text = "Ошибка: API-ключ Gemini не настроен! Задайте его командой 'set key <api_key>'.";
-        return result;
-    }
-
-    if (WiFi.status() != WL_CONNECTED) {
-        result.text = "Ошибка: Нет подключения к Wi-Fi сети!";
-        return result;
-    }
-
     unsigned long startTime = millis();
     String url = buildApiUrl();
-    String requestBody = buildRequestBody(prompt);
 
-    // До 2 попыток при временных ошибках 500, 503 или таймаутах соединения
     const int maxAttempts = 2;
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
         WiFiClientSecure client;
@@ -265,7 +268,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
 
         http.addHeader("Content-Type", "application/json; charset=utf-8");
         http.addHeader("x-goog-api-key", cfg.apiKey);
-        http.setTimeout(30000); // 30 секунд таймаут на генерацию нейросетью
+        http.setTimeout(30000);
 
         int httpResponseCode = http.POST(requestBody);
         result.httpCode = httpResponseCode;
@@ -276,13 +279,10 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
             if (httpResponseCode == 200) {
                 parseResponse(payload, result);
                 http.end();
-                // Обработка аппаратных действий, если модель запросила действие
-                processHardwareActions(result);
                 return result;
             } else if ((httpResponseCode == 500 || httpResponseCode == 503) && attempt < maxAttempts) {
-                // Повторная попытка при временном сбое сервера
                 http.end();
-                delay(1500);
+                delay(1000);
                 continue;
             } else {
                 parseResponse(payload, result);
@@ -290,10 +290,6 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
                     char errHdr[128];
                     snprintf(errHdr, sizeof(errHdr), "Ошибка HTTP %d: %s", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
                     result.text = errHdr;
-                    if (!payload.isEmpty()) {
-                        result.text += "\nОтвет Google: ";
-                        result.text += payload.substring(0, 300);
-                    }
                 }
                 http.end();
                 return result;
@@ -301,11 +297,11 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
         } else {
             if (attempt < maxAttempts) {
                 http.end();
-                delay(1500);
+                delay(1000);
                 continue;
             }
             char reqErr[200];
-            snprintf(reqErr, sizeof(reqErr), "Ошибка отправки HTTPS запроса: %s (%s)", 
+            snprintf(reqErr, sizeof(reqErr), "Ошибка HTTPS: %s (%s)", 
                      http.errorToString(httpResponseCode).c_str(), getHttpErrorDescription(httpResponseCode).c_str());
             result.text = reqErr;
             http.end();
@@ -314,6 +310,81 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     }
 
     return result;
+}
+
+GeminiResponse GeminiClient::askAgent(const String& goalPrompt, int maxSteps) {
+    GeminiResponse finalResult;
+    finalResult.success = false;
+    finalResult.agentStepsExecuted = 0;
+
+    const AppConfig& cfg = _configMgr.getConfig();
+    if (cfg.apiKey.isEmpty()) {
+        finalResult.text = "Ошибка: API-ключ Gemini не настроен! Задайте его командой 'set key <api_key>'.";
+        return finalResult;
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+        finalResult.text = "Ошибка: Нет подключения к Wi-Fi сети!";
+        return finalResult;
+    }
+
+    String currentPrompt = goalPrompt;
+    String historyContext = "";
+    int totalPromptTokens = 0;
+    int totalCandidateTokens = 0;
+    unsigned long startTotalTime = millis();
+
+    for (int step = 1; step <= maxSteps; step++) {
+        String reqBody = buildRequestBody(currentPrompt, historyContext);
+        GeminiResponse stepResp = sendRawRequest(reqBody);
+
+        totalPromptTokens += stepResp.promptTokens;
+        totalCandidateTokens += stepResp.candidateTokens;
+
+        if (!stepResp.success) {
+            finalResult = stepResp;
+            break;
+        }
+
+        finalResult = stepResp;
+        finalResult.agentStepsExecuted = step;
+
+        // Проверяем, вернул ли ИИ команду действия на оборудовании
+        String actionResult;
+        if (extractAndExecuteAction(stepResp.text, actionResult)) {
+            Serial.printf("\n[АГЕНТ ШАГ %d/%d] Выполнено действие на ESP32:\n", step, maxSteps);
+            Serial.printf(" -> Результат: %s\n", actionResult.c_str());
+
+            if (step < maxSteps) {
+                // Формируем наблюдение для следующего шага
+                historyContext += "[Команда ИИ]: " + stepResp.text + "\n";
+                currentPrompt = "[Наблюдение с платы ESP32]: " + actionResult + 
+                                "\nПроанализируй полученные данные с оборудования. Продолжи выполнение поставленной задачи или дай итоговое заключение.";
+                continue;
+            } else {
+                finalResult.text += "\n\n[Выполнение на ESP32]: " + actionResult;
+                break;
+            }
+        } else {
+            // Действий больше нет — ИИ дал окончательный ответ
+            break;
+        }
+    }
+
+    finalResult.promptTokens = totalPromptTokens;
+    finalResult.candidateTokens = totalCandidateTokens;
+    finalResult.totalTokens = totalPromptTokens + totalCandidateTokens;
+    finalResult.durationMs = millis() - startTotalTime;
+
+    if (_usageTracker && finalResult.success) {
+        _usageTracker->recordRequest(finalResult.promptTokens, finalResult.candidateTokens, finalResult.totalTokens);
+    }
+
+    return finalResult;
+}
+
+GeminiResponse GeminiClient::ask(const String& prompt) {
+    // Выполняем запрос через автономный агентный цикл (до 2 шагов реакции)
+    return askAgent(prompt, 2);
 }
 
 static String formatTokensShort(uint32_t tokens) {
@@ -394,7 +465,6 @@ bool GeminiClient::listAvailableModels() {
     if (httpCode == 200) {
         String payload = http.getString();
         
-        // Создаем фильтр для оптимизации расхода RAM
         JsonDocument filter;
         filter["models"][0]["name"] = true;
         filter["models"][0]["displayName"] = true;
@@ -436,7 +506,6 @@ bool GeminiClient::listAvailableModels() {
             const char* fullName = m["name"] | "";
             const char* dispName = m["displayName"] | "";
             
-            // Проверяем, поддерживает ли модель генерацию контента
             bool supportsGen = false;
             JsonArray methods = m["supportedGenerationMethods"];
             for (const char* method : methods) {
@@ -448,7 +517,6 @@ bool GeminiClient::listAvailableModels() {
 
             if (!supportsGen) continue;
 
-            // Убираем префикс "models/"
             String modelId = fullName;
             if (modelId.startsWith("models/")) {
                 modelId = modelId.substring(7);
@@ -479,56 +547,32 @@ bool GeminiClient::listAvailableModels() {
             printCell(dispName, 35);
             Serial.print(" | ");
             printCell(limitStr, 20);
-            Serial.printf(" | %s |\n", statusStr);
+            Serial.print(" | ");
+            Serial.printf("%s |\n", statusStr);
         }
-        _cachedModels.shrink_to_fit();
-        saveCachedModels();
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
-        Serial.printf("Всего поддерживаемых моделей: %d\n", count);
-        Serial.printf("Текущая активная модель: %s\n", cfg.model.c_str());
-        if (_usageTracker) {
-            DailyUsageStats st = _usageTracker->getStats();
-            if (st.dailyRequestLimit > 0) {
-                int rem = (int)st.dailyRequestLimit - (int)st.requestsToday;
-                if (rem < 0) rem = 0;
-                Serial.printf("Суточный расход текущей модели: %u из %u запросов (Осталось на сегодня: %d)\n", 
-                              st.requestsToday, st.dailyRequestLimit, rem);
-            } else {
-                Serial.printf("Суточный расход текущей модели: %u запросов (Безлимитный режим)\n", st.requestsToday);
-            }
-            Serial.printf("Сброс суточных лимитов через: %s\n\n", _usageTracker->getTimeUntilMidnight().c_str());
-        }
-        Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 24') или 'set model <id>'.\n"));
 
+        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
+        Serial.printf(" Всего доступных моделей генерации: %d\n", count);
+        Serial.println(F(" Для смены модели введите: 'set model <ID Модели>' или 'set model <№ из таблицы>'\n"));
+
+        saveCachedModels();
         http.end();
         return true;
     } else {
-        String payload = (httpCode > 0) ? http.getString() : "";
-        Serial.printf("[ОШИБКА] Не удалось получить список моделей. HTTP Код: %d (%s)\n", 
+        Serial.printf("[ОШИБКА] Не удалось получить список моделей. Код HTTP: %d (%s)\n", 
                       httpCode, getHttpErrorDescription(httpCode).c_str());
-        if (!payload.isEmpty()) {
-            JsonDocument errDoc;
-            if (!deserializeJson(errDoc, payload) && errDoc["error"]) {
-                Serial.printf("[ОТВЕТ GOOGLE API] %s: %s\n", 
-                              errDoc["error"]["status"] | "ERROR", 
-                              errDoc["error"]["message"] | "Неизвестная ошибка");
-            } else {
-                Serial.printf("[ОТВЕТ GOOGLE API] %s\n", payload.substring(0, 300).c_str());
-            }
-        }
         http.end();
         return false;
     }
 }
 
 bool GeminiClient::testConnection() {
-    Serial.println(F("[Тест] Проверка связи с Google Generative Language API..."));
-    GeminiResponse res = ask("Ответь одним словом: 'РАБОТАЕТ'");
-    if (res.success) {
-        Serial.printf("[Тест] Успешно! Ответ модели: %s (Время: %lu мс)\n", res.text.c_str(), res.durationMs);
-        return true;
-    } else {
-        Serial.printf("[Тест] Ошибка: %s\n", res.text.c_str());
-        return false;
-    }
+    const AppConfig& cfg = _configMgr.getConfig();
+    if (cfg.apiKey.isEmpty()) return false;
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(10);
+    return client.connect("generativelanguage.googleapis.com", 443);
 }
