@@ -1,4 +1,4 @@
-# PlatformIO
+# PlatformIO & IDE
 .pio
 .vscode
 .idea
@@ -7,6 +7,13 @@
 *.o
 *.bin
 *.elf
+*.d
 
 # Локальные файлы настроек и секретов
 secrets.h
+*.local.*
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+*.log
