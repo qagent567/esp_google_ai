@@ -28,11 +28,8 @@ const char* GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"; // Ключ Google AI Studio
 // Первый аргумент  — API-ключ.
 // Второй аргумент — название модели (можно менять в любой момент).
 // 
-// Доступные бесплатные модели (Free Tier, 1500 запросов/сутки):
+// Рекомендуемая модель (Free Tier, 500 запросов/сутки):
 //   "gemini-3.5-flash-lite"   — ⚡ Самая быстрая и экономичная (рекомендуется для ESP32)
-//   "gemini-2.0-flash"        — 🚀 Новая Flash серия, умнее и быстрее
-//   "gemini-1.5-flash"        — 🔥 Мощная Flash с расширенным контекстом
-//   "gemini-1.5-pro"          — 🧠 Наиболее мощная (медленнее, больше токенов)
 GeminiESP32 ai(GEMINI_API_KEY, "gemini-3.5-flash-lite");
 
 void setup() {

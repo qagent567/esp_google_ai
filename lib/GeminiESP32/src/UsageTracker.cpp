@@ -10,7 +10,7 @@ static const char* NVS_NAMESPACE = "gemini_usage";
 UsageTracker::UsageTracker()
     : _timezoneOffset(3), _minuteWindowStart(0) {
     memset(&_stats, 0, sizeof(_stats));
-    _stats.dailyRequestLimit = 1500;
+    _stats.dailyRequestLimit = 500;
     _stats.minuteLimit = 15;
     _stats.currentDayOfYear = -1;
 }
@@ -120,7 +120,7 @@ void UsageTracker::loadFromNvs() {
         _stats.promptTokensToday = p.getUInt("p_tok_today", 0);
         _stats.responseTokensToday = p.getUInt("r_tok_today", 0);
         _stats.totalTokensToday = p.getUInt("t_tok_today", 0);
-        _stats.dailyRequestLimit = p.getUInt("d_limit", 1500);
+        _stats.dailyRequestLimit = p.getUInt("d_limit", 500);
         _stats.minuteLimit = p.getUInt("m_limit", 15);
         _stats.currentDayOfYear = p.getInt("day_of_year", -1);
         p.end();

@@ -35,11 +35,11 @@ GeminiClient::GeminiClient(ConfigManager& configMgr,
 uint32_t GeminiClient::getModelDailyLimit(const String& modelId) {
     String m = modelId;
     m.toLowerCase();
-    if (m.indexOf("flash-lite") >= 0) return 1500;
-    if (m.indexOf("flash") >= 0) return 1500;
+    if (m.indexOf("flash-lite") >= 0) return 500;
+    if (m.indexOf("flash") >= 0) return 500;
     if (m.indexOf("pro") >= 0) return 50;
-    if (m.indexOf("gemma") >= 0) return 1500;
-    return 1500;
+    if (m.indexOf("gemma") >= 0) return 500;
+    return 500;
 }
 
 void GeminiClient::loadCachedModels() {
