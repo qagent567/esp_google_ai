@@ -14,11 +14,11 @@ GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker,
 uint32_t GeminiClient::getModelDailyLimit(const String& modelId) {
     String m = modelId;
     m.toLowerCase();
-    if (m.indexOf("deep-research") >= 0) return 50;
-    if (m.indexOf("computer-use") >= 0) return 50;
-    if (m.indexOf("pro") >= 0) return 200;
-    if (m.indexOf("robotics") >= 0) return 100;
-    return 1500; // Flash, Flash-Lite, Gemma, Nano, TTS, etc.
+    if (m.indexOf("flash-lite") >= 0) return 500;
+    if (m.indexOf("flash") >= 0) return 500;
+    if (m.indexOf("pro") >= 0) return 50;
+    if (m.indexOf("gemma") >= 0) return 500;
+    return 500;
 }
 
 void GeminiClient::loadCachedModels() {

@@ -779,8 +779,8 @@ void SerialCLI::runSelfTest() {
         tracker.setDailyLimit(1);
         assertTest("Срабатывание суточного лимита (isLimitReached == true)", tracker.isLimitReached());
 
-        tracker.setDailyLimit(1500);
-        assertTest("Восстановление лимита (1500 RPD)", tracker.getStats().dailyRequestLimit == 1500 && !tracker.isLimitReached());
+        tracker.setDailyLimit(500);
+        assertTest("Восстановление лимита (500 RPD)", tracker.getStats().dailyRequestLimit == 500 && !tracker.isLimitReached());
     }
 
     // 5. Интеграционные тесты (сеть и реальный API)

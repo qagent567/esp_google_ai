@@ -198,7 +198,7 @@ void test_usage_tracker_limits_and_reset(void) {
     usage->setDailyLimit(1);
     TEST_ASSERT_TRUE(usage->isLimitReached());
 
-    usage->setDailyLimit(1500);
+    usage->setDailyLimit(500);
     TEST_ASSERT_FALSE(usage->isLimitReached());
 }
 

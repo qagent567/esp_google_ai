@@ -8,8 +8,8 @@
 #define ANSI_YELLOW  ""
 #define ANSI_CYAN    ""
 
-// Значение суточного лимита по умолчанию (Google AI Studio Free Tier для Flash/Lite: 1500 RPD)
-static const uint32_t DEFAULT_DAILY_LIMIT = 1500;
+// Значение суточного лимита по умолчанию (Google AI Studio Free Tier для Flash/Lite: 500 RPD)
+static const uint32_t DEFAULT_DAILY_LIMIT = 500;
 
 UsageTracker::UsageTracker() : _ntpSynced(false) {
     _stats.dailyRequestLimit = DEFAULT_DAILY_LIMIT;
@@ -199,7 +199,7 @@ void UsageTracker::printQuotaReport() {
     Serial.printf(" [СБРОС СУТОК ЧЕРЕЗ]  : %s\n", getTimeUntilMidnight().c_str());
     Serial.println(F("----------------------------------------------------------------------"));
     Serial.println(F(" Команды управления квотой:"));
-    Serial.println(F("  • set limit <число>   - изменить суточный лимит (напр. 'set limit 1500', 0 = выкл)"));
+    Serial.println(F("  • set limit <число>   - изменить суточный лимит (напр. 'set limit 500', 0 = выкл)"));
     Serial.println(F("  • reset quota         - сбросить счетчики сегодняшнего дня"));
     Serial.println(F("  • reset allquota      - сбросить всю статистику (включая общую за все время)"));
     Serial.println(F("======================================================================\n"));
