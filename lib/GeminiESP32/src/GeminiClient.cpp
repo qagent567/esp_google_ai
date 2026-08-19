@@ -6,7 +6,7 @@
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
 
 GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker, HardwareController* hwController)
-    : _configMgr(configMgr), _usageTracker(usageTracker), _hwController(hwController) {
+    : _configMgr(configMgr), _usageTracker(usageTracker), _hwController(hwController), _persistentHistory(false) {
     loadCachedModels();
 }
 
@@ -53,6 +53,61 @@ void GeminiClient::saveCachedModels() {
     }
 }
 
+void GeminiClient::enablePersistentHistory(bool enable) {
+    _persistentHistory = enable;
+    if (enable) {
+        loadHistoryFromNvs();
+    }
+}
+
+void GeminiClient::loadHistoryFromNvs() {
+    Preferences p;
+    if (p.begin("gem_hist", true)) {
+        size_t count = p.getUInt("count", 0);
+        if (count > 0 && count <= GEMINI_HISTORY_LIMIT) {
+            _history.clear();
+            for (size_t i = 0; i < count; i++) {
+                char rKey[16], tKey[16];
+                snprintf(rKey, sizeof(rKey), "r_%u", (unsigned int)i);
+                snprintf(tKey, sizeof(tKey), "t_%u", (unsigned int)i);
+                String role = p.getString(rKey, "");
+                String text = p.getString(tKey, "");
+                if (!role.isEmpty() && !text.isEmpty()) {
+                    _history.push_back({role, text});
+                }
+            }
+        }
+        p.end();
+    }
+}
+
+void GeminiClient::saveHistoryToNvs() {
+    Preferences p;
+    if (p.begin("gem_hist", false)) {
+        p.clear();
+        p.putUInt("count", _history.size());
+        for (size_t i = 0; i < _history.size(); i++) {
+            char rKey[16], tKey[16];
+            snprintf(rKey, sizeof(rKey), "r_%u", (unsigned int)i);
+            snprintf(tKey, sizeof(tKey), "t_%u", (unsigned int)i);
+            p.putString(rKey, _history[i].role);
+            p.putString(tKey, _history[i].text);
+        }
+        p.end();
+    }
+}
+
+void GeminiClient::clearHistory() {
+    _history.clear();
+    if (_persistentHistory) {
+        Preferences p;
+        if (p.begin("gem_hist", false)) {
+            p.clear();
+            p.end();
+        }
+    }
+}
+
 void GeminiClient::addHistory(const String& role, const String& text) {
     _history.push_back({role, text});
     while (_history.size() > GEMINI_HISTORY_LIMIT) {
@@ -60,6 +115,9 @@ void GeminiClient::addHistory(const String& role, const String& text) {
         if (!_history.empty() && _history.front().role == "model") {
             _history.erase(_history.begin());
         }
+    }
+    if (_persistentHistory) {
+        saveHistoryToNvs();
     }
 }
 
@@ -70,6 +128,17 @@ String GeminiClient::buildApiUrl() const {
     
     char urlBuf[256];
     snprintf(urlBuf, sizeof(urlBuf), "%s%s:generateContent?key=%s", 
+             GEMINI_API_HOST, cleanModel.c_str(), cleanKey.c_str());
+    return String(urlBuf);
+}
+
+String GeminiClient::buildStreamApiUrl() const {
+    const AppConfig& cfg = _configMgr.getConfig();
+    String cleanModel = cfg.model; cleanModel.trim();
+    String cleanKey = cfg.apiKey; cleanKey.trim();
+    
+    char urlBuf[256];
+    snprintf(urlBuf, sizeof(urlBuf), "%s%s:streamGenerateContent?alt=sse&key=%s", 
              GEMINI_API_HOST, cleanModel.c_str(), cleanKey.c_str());
     return String(urlBuf);
 }
@@ -321,6 +390,112 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     }
 
     return result;
+}
+
+GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
+    GeminiResponse result;
+    result.success = false;
+    result.httpCode = 0;
+    result.totalTokens = 0;
+    result.durationMs = 0;
+
+    const AppConfig& cfg = _configMgr.getConfig();
+
+    if (cfg.apiKey.isEmpty()) {
+        result.text = "Ошибка: API-ключ Gemini не настроен!";
+        return result;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        result.text = "Ошибка: Нет подключения к Wi-Fi сети!";
+        return result;
+    }
+
+    unsigned long startTime = millis();
+    String url = buildStreamApiUrl();
+    String requestBody = buildRequestBody(prompt);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(30);
+
+    HTTPClient http;
+    if (!http.begin(client, url)) {
+        result.text = "Ошибка: Не удалось инициализировать HTTPS соединение.";
+        result.durationMs = millis() - startTime;
+        return result;
+    }
+
+    http.addHeader("Content-Type", "application/json; charset=utf-8");
+    http.addHeader("x-goog-api-key", cfg.apiKey);
+    http.setTimeout(30000);
+
+    int httpResponseCode = http.POST(requestBody);
+    result.httpCode = httpResponseCode;
+    result.durationMs = millis() - startTime;
+
+    if (httpResponseCode == 200) {
+        WiFiClient* stream = http.getStreamPtr();
+        String accumulatedText = "";
+        
+        while (http.connected() && (stream->available() || stream->connected())) {
+            if (stream->available()) {
+                String line = stream->readStringUntil('\n');
+                line.trim();
+                if (line.startsWith("data: ")) {
+                    String jsonChunk = line.substring(6);
+                    jsonChunk.trim();
+                    if (jsonChunk.length() > 0) {
+                        JsonDocument doc;
+                        DeserializationError err = deserializeJson(doc, jsonChunk);
+                        if (!err && doc["candidates"].is<JsonArray>() && doc["candidates"].size() > 0) {
+                            JsonObject cand = doc["candidates"][0];
+                            if (cand["content"]["parts"].is<JsonArray>() && cand["content"]["parts"].size() > 0) {
+                                const char* chunkText = cand["content"]["parts"][0]["text"];
+                                if (chunkText != nullptr) {
+                                    String chunkStr = String(chunkText);
+                                    accumulatedText += chunkStr;
+                                    if (onChunk) onChunk(chunkStr, false);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            yield();
+        }
+        
+        if (onChunk) onChunk("", true); // Сигнал завершения потока
+        
+        http.end();
+        result.success = true;
+        result.text = accumulatedText;
+        result.durationMs = millis() - startTime;
+        
+        result.promptTokens = prompt.length() / 4;
+        result.candidateTokens = accumulatedText.length() / 4;
+        result.totalTokens = result.promptTokens + result.candidateTokens;
+        
+        if (_usageTracker) {
+            _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
+        }
+
+        addHistory("user", prompt);
+        addHistory("model", accumulatedText);
+
+        processHardwareActions(result);
+        return result;
+    } else {
+        String payload = http.getString();
+        parseResponse(payload, result);
+        if (result.text.isEmpty() || result.text.startsWith("Не удалось извлечь")) {
+            char errHdr[128];
+            snprintf(errHdr, sizeof(errHdr), "Ошибка HTTP %d: %s", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
+            result.text = errHdr;
+        }
+        http.end();
+        return result;
+    }
 }
 
 static String formatTokensShort(uint32_t tokens) {

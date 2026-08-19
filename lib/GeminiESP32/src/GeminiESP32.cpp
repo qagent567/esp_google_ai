@@ -1,7 +1,42 @@
 #include "GeminiESP32.h"
 
+struct AsyncQueryContext {
+    GeminiClient* client;
+    String prompt;
+    GeminiResponseCallback onResponse;
+    GeminiTextCallback onText;
+    GeminiStreamCallback onChunk;
+    bool isStream;
+    bool isTextOnly;
+    volatile bool* pBusyFlag;
+};
+
+static void geminiAsyncWorker(void* pvParameters) {
+    AsyncQueryContext* ctx = static_cast<AsyncQueryContext*>(pvParameters);
+    if (ctx && ctx->client) {
+        if (ctx->isStream) {
+            GeminiResponse resp = ctx->client->streamAsk(ctx->prompt, ctx->onChunk);
+            if (ctx->onResponse) {
+                ctx->onResponse(resp);
+            }
+        } else {
+            GeminiResponse resp = ctx->client->ask(ctx->prompt);
+            if (ctx->isTextOnly) {
+                if (ctx->onText) ctx->onText(resp.text);
+            } else {
+                if (ctx->onResponse) ctx->onResponse(resp);
+            }
+        }
+    }
+    if (ctx && ctx->pBusyFlag) {
+        *(ctx->pBusyFlag) = false;
+    }
+    delete ctx;
+    vTaskDelete(NULL);
+}
+
 GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
-    : _hardwareEnabled(true), _smartDnsEnabled(true) {
+    : _hardwareEnabled(true), _smartDnsEnabled(true), _isBusy(false) {
     _client = new GeminiClient(_config, &_usage, &_hardware);
     
     if (apiKey.length() > 0) {
@@ -49,6 +84,10 @@ void GeminiESP32::setTemperature(float temp) {
     _config.setTemperature(temp);
 }
 
+void GeminiESP32::setTimezone(int tzOffsetHours) {
+    _config.setTimezone(tzOffsetHours);
+}
+
 void GeminiESP32::setMaxTokens(int maxTokens) {
     _config.setMaxTokens(maxTokens);
 }
@@ -89,6 +128,10 @@ void GeminiESP32::clearHistory() {
     if (_client) _client->clearHistory();
 }
 
+void GeminiESP32::enablePersistentHistory(bool enable) {
+    if (_client) _client->enablePersistentHistory(enable);
+}
+
 String GeminiESP32::ask(const String& prompt) {
     if (!_client) return "Клиент Gemini не инициализирован";
     GeminiResponse resp = _client->ask(prompt);
@@ -103,6 +146,112 @@ GeminiResponse GeminiESP32::query(const String& prompt) {
         return err;
     }
     return _client->ask(prompt);
+}
+
+GeminiResponse GeminiESP32::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
+    if (!_client) {
+        GeminiResponse err;
+        err.success = false;
+        err.text = "Клиент Gemini не инициализирован";
+        return err;
+    }
+    return _client->streamAsk(prompt, onChunk);
+}
+
+bool GeminiESP32::askAsync(const String& prompt, GeminiTextCallback onResponse) {
+    if (_isBusy || !_client) return false;
+    _isBusy = true;
+
+    AsyncQueryContext* ctx = new AsyncQueryContext();
+    ctx->client = _client;
+    ctx->prompt = prompt;
+    ctx->onText = onResponse;
+    ctx->onResponse = nullptr;
+    ctx->onChunk = nullptr;
+    ctx->isStream = false;
+    ctx->isTextOnly = true;
+    ctx->pBusyFlag = &_isBusy;
+
+    BaseType_t res = xTaskCreatePinnedToCore(
+        geminiAsyncWorker,
+        "gemini_async",
+        8192,
+        ctx,
+        1,
+        NULL,
+        0 // Фоновое ядро 0
+    );
+
+    if (res != pdPASS) {
+        _isBusy = false;
+        delete ctx;
+        return false;
+    }
+    return true;
+}
+
+bool GeminiESP32::queryAsync(const String& prompt, GeminiResponseCallback onResponse) {
+    if (_isBusy || !_client) return false;
+    _isBusy = true;
+
+    AsyncQueryContext* ctx = new AsyncQueryContext();
+    ctx->client = _client;
+    ctx->prompt = prompt;
+    ctx->onText = nullptr;
+    ctx->onResponse = onResponse;
+    ctx->onChunk = nullptr;
+    ctx->isStream = false;
+    ctx->isTextOnly = false;
+    ctx->pBusyFlag = &_isBusy;
+
+    BaseType_t res = xTaskCreatePinnedToCore(
+        geminiAsyncWorker,
+        "gemini_async",
+        8192,
+        ctx,
+        1,
+        NULL,
+        0
+    );
+
+    if (res != pdPASS) {
+        _isBusy = false;
+        delete ctx;
+        return false;
+    }
+    return true;
+}
+
+bool GeminiESP32::streamAskAsync(const String& prompt, GeminiStreamCallback onChunk, GeminiResponseCallback onComplete) {
+    if (_isBusy || !_client) return false;
+    _isBusy = true;
+
+    AsyncQueryContext* ctx = new AsyncQueryContext();
+    ctx->client = _client;
+    ctx->prompt = prompt;
+    ctx->onText = nullptr;
+    ctx->onResponse = onComplete;
+    ctx->onChunk = onChunk;
+    ctx->isStream = true;
+    ctx->isTextOnly = false;
+    ctx->pBusyFlag = &_isBusy;
+
+    BaseType_t res = xTaskCreatePinnedToCore(
+        geminiAsyncWorker,
+        "gemini_stream",
+        8192,
+        ctx,
+        1,
+        NULL,
+        0
+    );
+
+    if (res != pdPASS) {
+        _isBusy = false;
+        delete ctx;
+        return false;
+    }
+    return true;
 }
 
 bool GeminiESP32::ping() {

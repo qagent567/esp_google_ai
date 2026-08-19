@@ -7,6 +7,7 @@
 #include <lwip/dns.h>
 #include <lwip/ip_addr.h>
 #include <vector>
+#include <functional>
 
 // Подключение внутренних модулей библиотеки
 #include "ConfigManager.h"
@@ -61,14 +62,24 @@ public:
      */
     void setTimezone(int tzOffsetHours);
 
-    // --- Управление историей диалога ---
-    void clearHistory();
-
     /**
      * @brief Настройка максимального количества токенов
      */
     void setMaxTokens(int maxTokens);
 
+    // --- Управление историей диалога ---
+    /**
+     * @brief Очистить историю диалога (контекст)
+     */
+    void clearHistory();
+
+    /**
+     * @brief Включение/выключение сохранения истории во Flash-память NVS
+     * Позволяет сохранять память диалога даже после перезагрузки платы ESP32.
+     */
+    void enablePersistentHistory(bool enable = true);
+
+    // --- Управление сетью и Smart DNS ---
     /**
      * @brief Включение/выключение Smart DNS
      */
@@ -79,6 +90,7 @@ public:
      */
     void setSmartDns(const char* primary = "111.88.96.50", const char* secondary = "111.88.96.51");
 
+    // --- Аппаратная изоляция и безопасность ---
     /**
      * @brief Включение/выключение аппаратного управления платой (GPIO/ADC/I2C)
      * Если выключено — библиотека никогда не трогает пины и шины платы.
@@ -97,6 +109,7 @@ public:
      */
     void allowAllSafePins();
 
+    // --- Синхронные запросы ---
     /**
      * @brief Простой синхронный запрос к Gemini (возвращает только текст ответа)
      * @param prompt Вопрос или инструкция для ИИ
@@ -110,28 +123,47 @@ public:
     GeminiResponse query(const String& prompt);
 
     /**
+     * @brief Потоковый запрос (Server-Sent Events / Streaming)
+     * Вызывает callback по мере поступления новых фрагментов текста от Google.
+     * @param prompt Вопрос для ИИ
+     * @param onChunk Функция обратного вызова (текстовый фрагмент, флаг окончания)
+     */
+    GeminiResponse streamAsk(const String& prompt, GeminiStreamCallback onChunk);
+
+    // --- Асинхронные запросы (Не блокируют loop() благодаря FreeRTOS) ---
+    /**
+     * @brief Проверить, выполняется ли в данный момент асинхронный запрос в фоне
+     */
+    bool isBusy() const { return _isBusy; }
+
+    /**
+     * @brief Неблокирующий асинхронный запрос (текстовый колбэк)
+     * Запрос выполняется в отдельном потоке FreeRTOS, не мешая работе loop().
+     * @param prompt Вопрос для ИИ
+     * @param onResponse Колбэк, вызываемый при получении ответа
+     * @return true если фоновая задача успешно запущена, false если система занята
+     */
+    bool askAsync(const String& prompt, GeminiTextCallback onResponse);
+
+    /**
+     * @brief Неблокирующий асинхронный запрос (полный ответ со статистикой)
+     */
+    bool queryAsync(const String& prompt, GeminiResponseCallback onResponse);
+
+    /**
+     * @brief Неблокирующий потоковый запрос в фоне FreeRTOS
+     */
+    bool streamAskAsync(const String& prompt, GeminiStreamCallback onChunk, GeminiResponseCallback onComplete = nullptr);
+
+    /**
      * @brief Проверка доступности Google AI Studio API (Ping)
      */
     bool ping();
 
-    /**
-     * @brief Получить прямой доступ к аппаратному контроллеру
-     */
+    // --- Доступ к подсистемам ---
     HardwareController& getHardware() { return _hardware; }
-
-    /**
-     * @brief Получить доступ к трекеру суточных квот
-     */
     UsageTracker& getUsage() { return _usage; }
-
-    /**
-     * @brief Получить доступ к конфигурации
-     */
     ConfigManager& getConfig() { return _config; }
-
-    /**
-     * @brief Получить низкоуровневый клиент Gemini
-     */
     GeminiClient& getClient() { return *_client; }
 
 private:
@@ -141,4 +173,5 @@ private:
     GeminiClient* _client;
     bool _hardwareEnabled;
     bool _smartDnsEnabled;
+    volatile bool _isBusy;
 };

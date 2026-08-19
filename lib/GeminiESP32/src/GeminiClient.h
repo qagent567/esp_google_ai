@@ -5,6 +5,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <vector>
+#include <functional>
 #include "ConfigManager.h"
 
 #ifndef GEMINI_HISTORY_LIMIT
@@ -32,6 +33,11 @@ struct ChatMessage {
     String text;
 };
 
+// Типы функций обратного вызова (Callbacks)
+typedef std::function<void(const GeminiResponse& response)> GeminiResponseCallback;
+typedef std::function<void(const String& answer)> GeminiTextCallback;
+typedef std::function<void(const String& chunk, bool isLast)> GeminiStreamCallback;
+
 class UsageTracker;
 class HardwareController;
 
@@ -49,13 +55,23 @@ public:
     // Определение суточного лимита модели (RPD)
     static uint32_t getModelDailyLimit(const String& modelId);
 
-    // Управление историей диалога
-    void clearHistory() { _history.clear(); }
+    // --- Управление историей диалога ---
+    void clearHistory();
     const std::vector<ChatMessage>& getHistory() const { return _history; }
     void addHistory(const String& role, const String& text);
 
-    // Отправка текстового запроса (промпта) к Gemini (с авто-повтором при сбоях и обработкой аппаратных действий)
+    // Сохранение и загрузка истории из Flash (NVS)
+    void enablePersistentHistory(bool enable = true);
+    bool isPersistentHistoryEnabled() const { return _persistentHistory; }
+    void loadHistoryFromNvs();
+    void saveHistoryToNvs();
+
+    // --- Синхронные запросы ---
+    // Отправка текстового запроса (промпта) к Gemini
     GeminiResponse ask(const String& prompt);
+
+    // Потоковый запрос (Server-Sent Events / SSE Streaming)
+    GeminiResponse streamAsk(const String& prompt, GeminiStreamCallback onChunk);
 
     // Получение и вывод списка доступных моделей через API
     bool listAvailableModels();
@@ -72,6 +88,7 @@ public:
 
     // Формирование URL эндпоинта
     String buildApiUrl() const;
+    String buildStreamApiUrl() const;
 
     // Формирование JSON полезной нагрузки
     String buildRequestBody(const String& prompt) const;
@@ -98,4 +115,5 @@ private:
     HardwareController* _hwController;
     std::vector<String> _cachedModels;
     std::vector<ChatMessage> _history;
+    bool _persistentHistory;
 };

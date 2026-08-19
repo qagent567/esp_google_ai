@@ -225,6 +225,26 @@ if (resp.success) {
     Serial.println(resp.durationMs);      // Время ответа в мс
 }
 
+// ⚡ Потоковый вывод (Streaming / Server-Sent Events)
+// Текст выводится фрагментами по мере генерации на серверах Google!
+ai.streamAsk("Расскажи сказку", [](const String& chunk, bool isLast) {
+    Serial.print(chunk); // Вывод в Serial / OLED по кусочкам
+});
+
+// 🚀 Неблокирующие асинхронные запросы (FreeRTOS Background Task)
+// loop() не зависает и продолжает управлять железом!
+ai.askAsync("Включи свет", [](const String& answer) {
+    Serial.println("[ИИ ответил]: " + answer);
+});
+
+// Проверка занятости фонового потока
+if (ai.isBusy()) {
+    // ИИ сейчас генерирует ответ в фоне
+}
+
+// Сохранение контекста во Flash NVS (помнит диалог после рестарта)
+ai.enablePersistentHistory(true);
+
 // Проверка доступности API (без запроса к ИИ)
 bool ok = ai.ping();
 ```
@@ -559,6 +579,8 @@ build_flags =
 | [BasicChat](examples/BasicChat/BasicChat.ino) | Простой чат: вопрос → ответ через Serial Monitor |
 | [HardwareControl](examples/HardwareControl/HardwareControl.ino) | ИИ управляет GPIO, читает ADC, сканирует I2C |
 | [Integration](examples/Integration/Integration.ino) | Встраивание ИИ в готовую прошивку без конфликтов |
+| [AsyncChat](examples/AsyncChat/AsyncChat.ino) | Неблокирующие асинхронные запросы в фоне FreeRTOS |
+| [StreamingChat](examples/StreamingChat/StreamingChat.ino) | Мгновенный потоковый вывод (Server-Sent Events) |
 
 ---
 
