@@ -1,5 +1,9 @@
 #pragma once
 
+#include "GeminiConfig.h"
+
+#if GEMINI_ENABLE_WEB_DASHBOARD
+
 #include <Arduino.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
@@ -52,3 +56,5 @@ private:
     bool _inBackground;
     TaskHandle_t _taskHandle;
 };
+
+#endif // GEMINI_ENABLE_WEB_DASHBOARD

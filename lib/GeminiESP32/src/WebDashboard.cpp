@@ -1,4 +1,7 @@
 #include "WebDashboard.h"
+
+#if GEMINI_ENABLE_WEB_DASHBOARD
+
 #include "GeminiESP32.h"
 #include <WiFi.h>
 
@@ -208,11 +211,11 @@ bool WebDashboard::begin(GeminiESP32* ai, uint16_t port, bool inBackground) {
         xTaskCreatePinnedToCore(
             webServerTask,
             "web_dashboard",
-            4096,
+            GEMINI_WEB_STACK_SIZE,
             this,
             1,
             &_taskHandle,
-            0
+            GEMINI_WEB_TASK_CORE
         );
     }
 
@@ -258,8 +261,13 @@ void WebDashboard::handleStatus() {
     JsonDocument doc;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptime"] = millis() / 1000;
+#if GEMINI_ENABLE_USAGE_TRACKER
     doc["requestsToday"] = _ai->getUsage().getStats().requestsToday;
     doc["dailyLimit"] = _ai->getUsage().getStats().dailyRequestLimit;
+#else
+    doc["requestsToday"] = 0;
+    doc["dailyLimit"] = 1500;
+#endif
     doc["model"] = _ai->getConfig().getConfig().model;
 
     String jsonStr;
@@ -320,3 +328,5 @@ void WebDashboard::handleGpio() {
         _server->send(400, "application/json", "{\"error\":\"Invalid pin\"}");
     }
 }
+
+#endif // GEMINI_ENABLE_WEB_DASHBOARD

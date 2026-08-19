@@ -1,5 +1,9 @@
 #pragma once
 
+#include "GeminiConfig.h"
+
+#if GEMINI_ENABLE_HARDWARE
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <vector>
@@ -8,14 +12,14 @@
  * @brief Структура аппаратной телеметрии микроконтроллера ESP32
  */
 struct DeviceTelemetry {
-    float chipTempC;             // Температура кремниевого кристалла ESP32 в °C
-    uint32_t freeHeapBytes;      // Текущая свободная память RAM
-    uint32_t minFreeHeapBytes;   // Минимальный исторический остаток свободной RAM
-    uint32_t heapSizeBytes;      // Полный размер кучи (heap)
-    uint32_t uptimeSec;          // Время непрерывной работы с момента запуска
-    int wifiRssi;                // Уровень сигнала Wi-Fi (dBm)
-    uint32_t cpuFreqMHz;         // Тактовая частота CPU (обычно 240 МГц)
-    uint32_t flashSizeBytes;     // Объем Flash памяти (байты)
+    float chipTempC;             ///< Температура кремниевого кристалла ESP32 в °C
+    uint32_t freeHeapBytes;      ///< Текущая свободная оперативная память RAM
+    uint32_t minFreeHeapBytes;   ///< Минимальный исторический остаток свободной RAM
+    uint32_t heapSizeBytes;      ///< Полный размер кучи (heap)
+    uint32_t uptimeSec;          ///< Время непрерывной работы с момента запуска в секундах
+    int wifiRssi;                ///< Уровень сигнала Wi-Fi (dBm)
+    uint32_t cpuFreqMHz;         ///< Тактовая частота CPU (обычно 240 МГц)
+    uint32_t flashSizeBytes;     ///< Объем Flash памяти (байты)
 };
 
 /**
@@ -68,3 +72,5 @@ private:
     bool _enabled;
     std::vector<uint8_t> _allowedPins;
 };
+
+#endif // GEMINI_ENABLE_HARDWARE

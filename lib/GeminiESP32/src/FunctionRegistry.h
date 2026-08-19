@@ -1,23 +1,27 @@
 #pragma once
 
+#include "GeminiConfig.h"
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <vector>
 #include <functional>
 
 /**
- * @brief Описание параметра для Function Calling
+ * @brief Описание параметра для нативного Function Calling (Tool Use)
  */
 struct FunctionParam {
-    String name;        // Имя параметра
-    String type;        // STRING, NUMBER, INTEGER, BOOLEAN, ARRAY, OBJECT
-    String description; // Описание параметра для ИИ
-    bool required;      // Обязателен ли параметр
+    String name;        ///< Имя параметра (напр. "state", "temperature", "channel")
+    String type;        ///< Тип данных: "STRING", "NUMBER", "INTEGER", "BOOLEAN", "ARRAY", "OBJECT"
+    String description; ///< Подробное описание параметра для нейросети
+    bool required;      ///< Обязателен ли данный параметр для передачи
 };
 
 /**
  * @brief Функция обратного вызова для зарегистрированного инструмента
- * Принимает JsonObject с аргументами, переданными нейросетью.
+ * Принимает JsonObjectConst с аргументами, переданными нейросетью.
  * Возвращает строку с результатом работы (будет передана ИИ или пользователю).
  */
 typedef std::function<String(JsonObjectConst args)> FunctionHandler;
@@ -40,7 +44,7 @@ public:
     FunctionRegistry();
 
     /**
-     * @brief Регистрация пользовательской C++ функции
+     * @brief Регистрация пользовательской C++ функции с типизированными параметрами
      * @param name Уникальное имя функции (только латиница и подчеркивания, напр. "set_relay")
      * @param description Подробное описание для ИИ, когда и зачем вызывать эту функцию
      * @param params Список принимаемых аргументов
@@ -91,3 +95,5 @@ public:
 private:
     std::vector<FunctionDefinition> _functions;
 };
+
+#endif // GEMINI_ENABLE_FUNCTION_CALLING

@@ -144,30 +144,22 @@ build_flags =
     ; 0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, 5=VERBOSE
     -D CORE_DEBUG_LEVEL=0  ; Выключить отладку ESP-IDF (освобождает ~10 КБ RAM)
     
-    ; ─── Настройки GeminiESP32 ──────────────────────────────────────────────
-    ; Раскомментируйте нужные флаги:
-    
-    ; Отключить Smart DNS глобально (использовать DNS из Wi-Fi роутера)
-    ; -D GEMINI_NO_SMART_DNS
-    
-    ; Максимальный размер буфера ответа в байтах (по умолчанию 8192)
-    ; Уменьшите если не хватает RAM, увеличьте для длинных ответов
-    ; -D GEMINI_RESPONSE_BUFFER=4096
-    
-    ; Максимальная длина истории сообщений (по умолчанию 20)
-    ; -D GEMINI_HISTORY_LIMIT=10
-    
-    ; Количество авто-повторов при ошибках сети (по умолчанию 2)
-    ; -D GEMINI_RETRY_COUNT=3
-    
-    ; Таймаут HTTP-запроса в миллисекундах (по умолчанию 15000)
-    ; -D GEMINI_HTTP_TIMEOUT_MS=20000
-    
-    ; Отключить NVS кэш моделей (если не нужно сохранение настроек)
-    ; -D GEMINI_NO_NVS_CACHE
-    
-    ; Суточный лимит запросов (по умолчанию 1500 для Free Tier)
-    ; -D GEMINI_DAILY_LIMIT=500
+    ; ─── Модульность (Включение / Отключение подсистем) ─────────────────────
+    ; -D GEMINI_ENABLE_WEB_DASHBOARD=0    ; Вырезать встроенный Web Dashboard (-40 КБ Flash)
+    ; -D GEMINI_ENABLE_HARDWARE=0         ; Вырезать аппаратный контроллер GPIO/ADC/I2C
+    ; -D GEMINI_ENABLE_FUNCTION_CALLING=0 ; Вырезать Function Calling (Tools)
+    ; -D GEMINI_ENABLE_VISION=0           ; Вырезать поддержку отправки фото (Base64)
+    ; -D GEMINI_ENABLE_STREAMING=0        ; Вырезать Server-Sent Events стриминг
+    ; -D GEMINI_ENABLE_ASYNC=0            ; Вырезать FreeRTOS асинхронность
+    ; -D GEMINI_ENABLE_NVS_HISTORY=0      ; Хранить историю диалога только в RAM
+    ; -D GEMINI_ENABLE_USAGE_TRACKER=0    ; Отключить суточный учет квот
+
+    ; ─── Тонкая настройка памяти и параметров ───────────────────────────────
+    ; -D GEMINI_HISTORY_LIMIT=10          ; Длина памяти диалога (по умолчанию 10)
+    ; -D GEMINI_HTTP_TIMEOUT_MS=20000     ; Таймаут HTTPS запроса в мс (по умолчанию 30000)
+    ; -D GEMINI_ASYNC_STACK_SIZE=8192     ; Размер стека фоновой задачи FreeRTOS
+    ; -D GEMINI_ASYNC_TASK_CORE=0         ; Ядро CPU для фона (0 = второе ядро)
+    ; -D GEMINI_DEFAULT_MODEL=\"gemini-3.5-flash-lite\" ; Модель по умолчанию
 ```
 
 > **Примечание по `-Wl,--gc-sections`:** Этот флаг — самый мощный инструмент экономии Flash.

@@ -1,126 +1,238 @@
 #pragma once
 
+/**
+ * =============================================================================
+ *                  GeminiESP32 — Низкоуровневый клиент Gemini API
+ * =============================================================================
+ * Отвечает за формирование HTTPS запросов, работу с TLS, сериализацию JSON,
+ * потоковое чтение Server-Sent Events, кодирование Base64 и выполнение Tools.
+ * =============================================================================
+ */
+
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <vector>
 #include <functional>
-#include "ConfigManager.h"
-#include "FunctionRegistry.h"
 
-#ifndef GEMINI_HISTORY_LIMIT
-#define GEMINI_HISTORY_LIMIT 10
+#include "GeminiConfig.h"
+#include "ConfigManager.h"
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
+#include "FunctionRegistry.h"
 #endif
 
 /**
- * @brief Результат выполнения запроса к Gemini API
+ * @brief Структура детального результата выполнения запроса к Gemini API
  */
 struct GeminiResponse {
-    bool success;             // Флаг успешности
-    int httpCode;             // HTTP статус-код (200, 400, 403, 500 и т.д.)
-    String text;              // Текст ответа нейросети или текст ошибки
-    int promptTokens;         // Токенов во входящем запросе
-    int candidateTokens;      // Токенов в ответе нейросети
-    int totalTokens;          // Суммарно использовано токенов
-    unsigned long durationMs; // Время выполнения запроса в миллисекундах
-    bool hasFunctionCall;     // Была ли вызвана C++ функция (Tool Call)
-    String functionName;      // Имя вызванной функции
-    String functionResult;    // Результат выполнения функции на ESP32
+    bool success;             ///< Флаг успешности выполнения сетевого запроса и парсинга
+    int httpCode;             ///< HTTP статус-код сервера Google (200, 400, 403, 429, 500 и т.д.)
+    String text;              ///< Текст сгенерированного ответа нейросети или сообщение об ошибке
+    int promptTokens;         ///< Количество токенов во входящем запросе пользователя
+    int candidateTokens;      ///< Количество токенов в сгенерированном ответе модели
+    int totalTokens;          ///< Суммарное количество использованных токенов
+    unsigned long durationMs; ///< Длительность сетевого запроса в миллисекундах
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    bool hasFunctionCall;     ///< Флаг: был ли получен запрос на вызов C++ функции (Tool Call)
+    String functionName;      ///< Имя вызванной функции
+    String functionResult;    ///< Результат выполнения вызванной функции на микроконтроллере
+#endif
 };
 
 /**
- * @brief Сообщение в истории чата
+ * @brief Элемент истории сообщений диалога
  */
 struct ChatMessage {
-    String role;
-    String text;
+    String role; ///< Роль отправителя ("user" или "model")
+    String text; ///< Текст сообщения
 };
 
 // Типы функций обратного вызова (Callbacks)
 typedef std::function<void(const GeminiResponse& response)> GeminiResponseCallback;
 typedef std::function<void(const String& answer)> GeminiTextCallback;
+
+#if GEMINI_ENABLE_STREAMING
 typedef std::function<void(const String& chunk, bool isLast)> GeminiStreamCallback;
+#endif
 
 class UsageTracker;
 class HardwareController;
 
 /**
- * @brief Клиент для взаимодействия с Google AI Studio (Gemini API)
+ * @brief Клиент для прямого взаимодействия с REST API Google AI Studio
  */
 class GeminiClient {
 public:
+    /**
+     * @brief Конструктор клиента
+     * @param configMgr Ссылка на менеджер конфигурации
+     * @param usageTracker Опциональный указатель на трекер квот
+     * @param hwController Опциональный указатель на аппаратный контроллер
+     * @param funcRegistry Опциональный указатель на реестр функций
+     */
     GeminiClient(ConfigManager& configMgr, 
                  UsageTracker* usageTracker = nullptr, 
-                 HardwareController* hwController = nullptr,
-                 FunctionRegistry* funcRegistry = nullptr);
+                 HardwareController* hwController = nullptr
+#if GEMINI_ENABLE_FUNCTION_CALLING
+                 , FunctionRegistry* funcRegistry = nullptr
+#endif
+    );
 
-    // Установка указателей на внешние модули
+    // Установка указателей на внешние компоненты
     void setUsageTracker(UsageTracker* tracker) { _usageTracker = tracker; }
     void setHardwareController(HardwareController* hw) { _hwController = hw; }
-    void setFunctionRegistry(FunctionRegistry* registry) { _funcRegistry = registry; }
 
-    // Определение суточного лимита модели (RPD)
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    void setFunctionRegistry(FunctionRegistry* registry) { _funcRegistry = registry; }
+#endif
+
+    /**
+     * @brief Определение суточного лимита запросов (RPD) по имени модели
+     */
     static uint32_t getModelDailyLimit(const String& modelId);
 
-    // --- Управление историей диалога ---
+    // ─── Управление историей диалога ──────────────────────────────────────────
+    /**
+     * @brief Очистка оперативной истории диалога
+     */
     void clearHistory();
+
+    /**
+     * @brief Получение ссылки на текущий список сообщений в оперативной памяти
+     */
     const std::vector<ChatMessage>& getHistory() const { return _history; }
+
+    /**
+     * @brief Добавление сообщения в историю с автоматическим контролем лимита GEMINI_HISTORY_LIMIT
+     */
     void addHistory(const String& role, const String& text);
 
-    // Сохранение и загрузка истории из Flash (NVS)
+#if GEMINI_ENABLE_NVS_HISTORY
+    /**
+     * @brief Включение постоянного сохранения контекста во Flash NVS
+     */
     void enablePersistentHistory(bool enable = true);
-    bool isPersistentHistoryEnabled() const { return _persistentHistory; }
-    void loadHistoryFromNvs();
-    void saveHistoryToNvs();
 
-    // --- Синхронные запросы ---
-    // Текстовый запрос к Gemini
+    /**
+     * @brief Проверка, включено ли сохранение истории в NVS
+     */
+    bool isPersistentHistoryEnabled() const { return _persistentHistory; }
+
+    /**
+     * @brief Загрузка сохраненной истории из Flash-памяти
+     */
+    void loadHistoryFromNvs();
+
+    /**
+     * @brief Принудительное сохранение текущей истории во Flash-память
+     */
+    void saveHistoryToNvs();
+#endif
+
+    // ─── Сетевые запросы к Gemini API ─────────────────────────────────────────
+    /**
+     * @brief Отправка синхронного текстового запроса
+     * @param prompt Текст запроса к ИИ
+     * @return Структура GeminiResponse с ответом и метаданными
+     */
     GeminiResponse ask(const String& prompt);
 
-    // Мультимодальный запрос с изображением (Gemini Vision)
+#if GEMINI_ENABLE_VISION
+    /**
+     * @brief Отправка мультимодального запроса с изображением (Gemini Vision)
+     * @param prompt Текстовый вопрос по изображению
+     * @param imageData Указатель на буфер байтов картинки (JPEG/PNG)
+     * @param imageSize Размер картинки в байтах
+     * @param mimeType MIME-тип изображения (по умолчанию "image/jpeg")
+     */
     GeminiResponse askWithImage(const String& prompt, 
                                 const uint8_t* imageData, 
                                 size_t imageSize, 
                                 const String& mimeType = "image/jpeg");
+#endif
 
-    // Потоковый запрос (Server-Sent Events / SSE Streaming)
+#if GEMINI_ENABLE_STREAMING
+    /**
+     * @brief Потоковый запрос (Server-Sent Events / SSE Streaming)
+     * @param prompt Текст запроса к ИИ
+     * @param onChunk Функция обратного вызова для каждого поступающего фрагмента
+     */
     GeminiResponse streamAsk(const String& prompt, GeminiStreamCallback onChunk);
+#endif
 
-    // Получение и вывод списка доступных моделей через API
+    /**
+     * @brief Запрос и кэширование списка доступных моделей Google AI
+     */
     bool listAvailableModels();
 
-    // Загрузка и сохранение кэша моделей в NVS
+    /**
+     * @brief Загрузка кэша моделей из NVS
+     */
     void loadCachedModels();
+
+    /**
+     * @brief Сохранение списка моделей в NVS
+     */
     void saveCachedModels();
 
-    // Проверка доступности хоста API (DNS резолвинг и TLS пинг)
+    /**
+     * @brief Проверка сетевой доступности серверов Google AI
+     */
     bool testConnection();
 
-    // Получить описание ошибки по HTTP коду
+    /**
+     * @brief Получение понятного описания ошибки по HTTP статус-коду
+     */
     static String getHttpErrorDescription(int httpCode);
 
-    // Кодирование бинарных данных в Base64 (для отправки фото)
+#if GEMINI_ENABLE_VISION
+    /**
+     * @brief Быстрое кодирование бинарного буфера в строку Base64
+     */
     static String encodeBase64(const uint8_t* data, size_t length);
+#endif
 
-    // Формирование URL эндпоинта
+    /**
+     * @brief Формирование полного URL эндпоинта генерации
+     */
     String buildApiUrl() const;
-    String buildStreamApiUrl() const;
 
-    // Формирование JSON полезной нагрузки
+#if GEMINI_ENABLE_STREAMING
+    /**
+     * @brief Формирование URL эндпоинта потоковой генерации
+     */
+    String buildStreamApiUrl() const;
+#endif
+
+    /**
+     * @brief Построение JSON полезной нагрузки для текстового запроса
+     */
     String buildRequestBody(const String& prompt) const;
+
+#if GEMINI_ENABLE_VISION
+    /**
+     * @brief Построение JSON полезной нагрузки для запроса с изображением
+     */
     String buildRequestBodyWithImage(const String& prompt, 
                                      const uint8_t* imageData, 
                                      size_t imageSize, 
                                      const String& mimeType) const;
+#endif
 
-    // Парсинг JSON ответа от Google API
+    /**
+     * @brief Парсинг JSON ответа от Google API
+     */
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
 
-    // Обработка Function Calling и аппаратных действий
+    /**
+     * @brief Проверка и выполнение аппаратных действий в ответе модели
+     */
     void processHardwareActions(GeminiResponse& response);
 
-    // Доступ к кэшированному списку моделей
+    // Доступ к кэшированным моделям
     size_t getModelCount() const { return _cachedModels.size(); }
     String getModelByIndex(size_t index) const {
         if (index > 0 && index <= _cachedModels.size()) {
@@ -134,8 +246,15 @@ private:
     ConfigManager& _configMgr;
     UsageTracker* _usageTracker;
     HardwareController* _hwController;
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
     FunctionRegistry* _funcRegistry;
+#endif
+
     std::vector<String> _cachedModels;
     std::vector<ChatMessage> _history;
+
+#if GEMINI_ENABLE_NVS_HISTORY
     bool _persistentHistory;
+#endif
 };

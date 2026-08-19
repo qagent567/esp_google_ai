@@ -1,5 +1,24 @@
 #pragma once
 
+/**
+ * =============================================================================
+ *                      GeminiESP32 — Главный Фасад Библиотеки
+ * =============================================================================
+ * Предоставляет высокоуровневый, простой и элегантный C++ интерфейс для
+ * подключения искусственного интеллекта Google Gemini к проектам на ESP32.
+ *
+ * Особенности:
+ *  - ⚡ Запуск в 3 строки кода
+ *  - 🔒 Бесконфликтная изоляция пинов и шин
+ *  - 🌐 Встроенный Web Dashboard
+ *  - 🧠 Постоянная память диалога (Flash NVS)
+ *  - 🚀 Неблокирующая асинхронность FreeRTOS
+ *  - 🌊 Потоковый SSE-стриминг текста
+ *  - 👁️ Мультимодальность Gemini Vision (ESP32-CAM)
+ *  - ⚙️ Нативный Function Calling (Tool Use)
+ * =============================================================================
+ */
+
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -9,93 +28,109 @@
 #include <vector>
 #include <functional>
 
-// Подключение внутренних модулей библиотеки
+// Модули конфигурации и ядра
+#include "GeminiConfig.h"
 #include "ConfigManager.h"
+
+#if GEMINI_ENABLE_HARDWARE
 #include "HardwareController.h"
+#endif
+
+#if GEMINI_ENABLE_USAGE_TRACKER
 #include "UsageTracker.h"
+#endif
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
 #include "FunctionRegistry.h"
+#endif
+
+#if GEMINI_ENABLE_WEB_DASHBOARD
 #include "WebDashboard.h"
+#endif
+
 #include "GeminiClient.h"
 
 /**
  * @brief Главный высокоуровневый класс библиотеки GeminiESP32
- * Позволяет в 3-5 строк кода подключить Gemini AI к любому проекту ESP32.
- * Полностью настраиваемый, исключающий любые конфликты с периферией других прошивок.
  */
 class GeminiESP32 {
 public:
     /**
      * @brief Конструктор
-     * @param apiKey API-ключ Google AI Studio
-     * @param model Модель Gemini (по умолчанию gemini-3.5-flash-lite)
+     * @param apiKey API-ключ Google AI Studio (необязательно, можно передать в begin)
+     * @param model Название модели Gemini (по умолчанию "gemini-3.5-flash-lite")
      */
-    GeminiESP32(const String& apiKey = "", const String& model = "gemini-3.5-flash-lite");
+    GeminiESP32(const String& apiKey = "", const String& model = GEMINI_DEFAULT_MODEL);
     ~GeminiESP32();
 
     /**
-     * @brief Инициализация библиотеки
-     * @param apiKey Необязательный API-ключ (если не передан в конструктор)
-     * @param autoSmartDns Автоматически применить Smart DNS для обхода ограничений (по умолчанию true)
+     * @brief Инициализация библиотеки и подсистем
+     * @param apiKey Необязательный API-ключ Google AI Studio
+     * @param autoSmartDns Автоматически применить Smart DNS для обхода региональных блокировок
      */
     void begin(const String& apiKey = "", bool autoSmartDns = true);
 
+    // ─── Настройка параметров модели ──────────────────────────────────────────
     /**
-     * @brief Установка API ключа
+     * @brief Установка или смена API-ключа
      */
     void setApiKey(const String& apiKey);
 
     /**
-     * @brief Установка модели Gemini
+     * @brief Установка используемой модели (напр. "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro")
      */
     void setModel(const String& model);
 
     /**
-     * @brief Установка системного промпта
+     * @brief Установка системного промпта (роли/личности ИИ)
      */
     void setSystemPrompt(const String& prompt);
 
     /**
-     * @brief Настройка температуры генерации (0.0 - 2.0)
+     * @brief Настройка температуры генерации (0.0 = строго, 2.0 = максимально творчески)
      */
     void setTemperature(float temp);
 
     /**
-     * @brief Настройка часового пояса
+     * @brief Настройка часового пояса в часах (для корректного сброса суточных квот в полночь)
      */
     void setTimezone(int tzOffsetHours);
 
     /**
-     * @brief Настройка максимального количества токенов
+     * @brief Настройка максимальной длины ответа в токенах (1 токен ≈ 4 символа)
      */
     void setMaxTokens(int maxTokens);
 
-    // --- Управление историей диалога ---
+    // ─── Управление историей диалога ──────────────────────────────────────────
     /**
-     * @brief Очистить историю диалога (контекст)
+     * @brief Очистить контекст переписки (стереть память диалога)
      */
     void clearHistory();
 
+#if GEMINI_ENABLE_NVS_HISTORY
     /**
      * @brief Включение/выключение сохранения истории во Flash-память NVS
-     * Позволяет сохранять память диалога даже после перезагрузки платы ESP32.
+     * Позволяет сохранять память диалога даже после выключения питания или перезагрузки ESP32.
      */
     void enablePersistentHistory(bool enable = true);
+#endif
 
-    // --- Управление сетью и Smart DNS ---
+    // ─── Сеть и Smart DNS ─────────────────────────────────────────────────────
     /**
      * @brief Включение/выключение Smart DNS
      */
     void enableSmartDns(bool enable = true);
 
     /**
-     * @brief Ручная настройка Smart DNS серверов
+     * @brief Ручная настройка IP-адресов Smart DNS серверов
      */
-    void setSmartDns(const char* primary = "111.88.96.50", const char* secondary = "111.88.96.51");
+    void setSmartDns(const char* primary = GEMINI_SMART_DNS_PRIMARY, const char* secondary = GEMINI_SMART_DNS_SECONDARY);
 
-    // --- Аппаратная изоляция и безопасность ---
+#if GEMINI_ENABLE_HARDWARE
+    // ─── Аппаратная изоляция и безопасность ───────────────────────────────────
     /**
-     * @brief Включение/выключение аппаратного управления платой (GPIO/ADC/I2C)
-     * Если выключено — библиотека никогда не трогает пины и шины платы.
+     * @brief Включение/выключение встроенного управления железом платы (GPIO/ADC/I2C)
+     * Если выключено — библиотека никогда не трогает пины и шины вашей платы.
      */
     void enableHardwareControl(bool enable = true);
 
@@ -110,8 +145,9 @@ public:
      * @brief Разрешить управление всеми безопасными пинами (сброс белого списка)
      */
     void allowAllSafePins();
+#endif
 
-    // --- Синхронные запросы ---
+    // ─── Синхронные текстовые запросы ─────────────────────────────────────────
     /**
      * @brief Простой синхронный запрос к Gemini (возвращает только текст ответа)
      * @param prompt Вопрос или инструкция для ИИ
@@ -120,16 +156,18 @@ public:
     String ask(const String& prompt);
 
     /**
-     * @brief Полный запрос к Gemini (возвращает статус, токены, время и текст)
+     * @brief Полный синхронный запрос к Gemini (возвращает статус, токены, время и текст)
      */
     GeminiResponse query(const String& prompt);
 
+#if GEMINI_ENABLE_VISION
+    // ─── Мультимодальность (Gemini Vision) ────────────────────────────────────
     /**
-     * @brief Мультимодальный запрос с фото (Gemini Vision / ESP32-CAM)
-     * @param prompt Вопрос по картинке (например, "Что изображено на фото?")
-     * @param imageData Указатель на буфер с изображением (JPEG/PNG)
+     * @brief Простой мультимодальный запрос с изображением (возвращает текст)
+     * @param prompt Вопрос по картинке (напр. "Что изображено на фото?")
+     * @param imageData Указатель на буфер с байтами изображения (JPEG/PNG)
      * @param imageSize Размер изображения в байтах
-     * @param mimeType MIME-тип изображения (по умолчанию "image/jpeg")
+     * @param mimeType MIME-тип (по умолчанию "image/jpeg")
      */
     String askWithImage(const String& prompt, 
                         const uint8_t* imageData, 
@@ -137,22 +175,27 @@ public:
                         const String& mimeType = "image/jpeg");
 
     /**
-     * @brief Полный мультимодальный запрос с фото
+     * @brief Полный мультимодальный запрос со статистикой токенов и времени
      */
     GeminiResponse queryWithImage(const String& prompt, 
                                   const uint8_t* imageData, 
                                   size_t imageSize, 
                                   const String& mimeType = "image/jpeg");
+#endif
 
+#if GEMINI_ENABLE_STREAMING
+    // ─── Потоковая генерация (SSE Streaming) ──────────────────────────────────
     /**
-     * @brief Потоковый запрос (Server-Sent Events / Streaming)
+     * @brief Потоковый запрос (Server-Sent Events)
      * Вызывает callback по мере поступления новых фрагментов текста от Google.
      * @param prompt Вопрос для ИИ
      * @param onChunk Функция обратного вызова (текстовый фрагмент, флаг окончания)
      */
     GeminiResponse streamAsk(const String& prompt, GeminiStreamCallback onChunk);
+#endif
 
-    // --- Асинхронные запросы (Не блокируют loop() благодаря FreeRTOS) ---
+#if GEMINI_ENABLE_ASYNC
+    // ─── Асинхронные неблокирующие запросы (FreeRTOS) ─────────────────────────
     /**
      * @brief Проверить, выполняется ли в данный момент асинхронный запрос в фоне
      */
@@ -160,6 +203,10 @@ public:
 
     /**
      * @brief Неблокирующий асинхронный запрос (текстовый колбэк)
+     * Запрос выполняется в отдельном потоке FreeRTOS, не мешая работе loop().
+     * @param prompt Вопрос для ИИ
+     * @param onResponse Колбэк, вызываемый при получении ответа
+     * @return true если фоновая задача успешно запущена, false если система занята
      */
     bool askAsync(const String& prompt, GeminiTextCallback onResponse);
 
@@ -168,18 +215,22 @@ public:
      */
     bool queryAsync(const String& prompt, GeminiResponseCallback onResponse);
 
+#if GEMINI_ENABLE_STREAMING
     /**
      * @brief Неблокирующий потоковый запрос в фоне FreeRTOS
      */
     bool streamAskAsync(const String& prompt, GeminiStreamCallback onChunk, GeminiResponseCallback onComplete = nullptr);
+#endif
+#endif
 
-    // --- Нативный Function Calling (Tool Use) ---
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    // ─── Нативный Function Calling (Tool Use) ─────────────────────────────────
     /**
      * @brief Регистрация C++ функции для вызова моделью Gemini
-     * @param name Имя функции (напр. "set_relay")
-     * @param description Описание для нейросети
-     * @param params Параметры функции
-     * @param handler C++ лямбда/функция
+     * @param name Уникальное имя функции (только латиница и подчеркивания, напр. "set_relay")
+     * @param description Подробное описание для нейросети
+     * @param params Список аргументов
+     * @param handler C++ лямбда/функция-обработчик
      */
     void registerFunction(const String& name, 
                           const String& description, 
@@ -192,8 +243,10 @@ public:
     void registerFunction(const String& name, 
                           const String& description, 
                           FunctionHandler handler);
+#endif
 
-    // --- Встроенный Web Dashboard ---
+#if GEMINI_ENABLE_WEB_DASHBOARD
+    // ─── Встроенный Web Dashboard ─────────────────────────────────────────────
     /**
      * @brief Запуск встроенного веб-сервера со стильным интерфейсом чата и телеметрии
      * @param port Порт веб-сервера (по умолчанию 80)
@@ -207,26 +260,56 @@ public:
     void stopWebDashboard();
 
     /**
-     * @brief Проверка доступности Google AI Studio API (Ping)
+     * @brief Получить доступ к объекту Web Dashboard
+     */
+    WebDashboard& getDashboard() { return _dashboard; }
+#endif
+
+    /**
+     * @brief Проверка сетевой доступности Google AI Studio API (Ping)
      */
     bool ping();
 
-    // --- Доступ к подсистемам ---
+    // ─── Прямой доступ к подсистемам ──────────────────────────────────────────
+#if GEMINI_ENABLE_HARDWARE
     HardwareController& getHardware() { return _hardware; }
+#endif
+
+#if GEMINI_ENABLE_USAGE_TRACKER
     UsageTracker& getUsage() { return _usage; }
-    ConfigManager& getConfig() { return _config; }
+#endif
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
     FunctionRegistry& getFunctions() { return _functions; }
-    WebDashboard& getDashboard() { return _dashboard; }
+#endif
+
+    ConfigManager& getConfig() { return _config; }
     GeminiClient& getClient() { return *_client; }
 
 private:
     ConfigManager _config;
+
+#if GEMINI_ENABLE_HARDWARE
     HardwareController _hardware;
-    UsageTracker _usage;
-    FunctionRegistry _functions;
-    WebDashboard _dashboard;
-    GeminiClient* _client;
     bool _hardwareEnabled;
+#endif
+
+#if GEMINI_ENABLE_USAGE_TRACKER
+    UsageTracker _usage;
+#endif
+
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    FunctionRegistry _functions;
+#endif
+
+#if GEMINI_ENABLE_WEB_DASHBOARD
+    WebDashboard _dashboard;
+#endif
+
+    GeminiClient* _client;
     bool _smartDnsEnabled;
+
+#if GEMINI_ENABLE_ASYNC
     volatile bool _isBusy;
+#endif
 };

@@ -1,198 +1,155 @@
 #include "UsageTracker.h"
 
-// Значение суточного лимита по умолчанию (Google AI Studio Free Tier для Flash/Lite: 1500 RPD)
-static const uint32_t DEFAULT_DAILY_LIMIT = 1500;
+#if GEMINI_ENABLE_USAGE_TRACKER
 
-UsageTracker::UsageTracker() : _ntpSynced(false) {
-    _stats.dailyRequestLimit = DEFAULT_DAILY_LIMIT;
-    _stats.requestsToday = 0;
-    _stats.promptTokensToday = 0;
-    _stats.responseTokensToday = 0;
-    _stats.totalTokensToday = 0;
-    _stats.lifetimeRequests = 0;
-    _stats.lifetimeTokens = 0;
-    _stats.lastDay = -1;
-    _stats.lastResetMillis = 0;
+#include <time.h>
+#include <sys/time.h>
+
+static const char* NVS_NAMESPACE = "gemini_usage";
+
+UsageTracker::UsageTracker()
+    : _timezoneOffset(3), _minuteWindowStart(0) {
+    memset(&_stats, 0, sizeof(_stats));
+    _stats.dailyRequestLimit = 1500;
+    _stats.minuteLimit = 15;
+    _stats.currentDayOfYear = -1;
+}
+
+UsageTracker::~UsageTracker() {
 }
 
 bool UsageTracker::begin() {
-    _stats.lastResetMillis = millis();
-    load();
+    loadFromNvs();
     checkDayRollover();
     return true;
 }
 
-void UsageTracker::syncNTP(int gmtOffsetHours) {
-    configTime(gmtOffsetHours * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
-    _ntpSynced = true;
-    checkDayRollover();
-}
-
-void UsageTracker::load() {
-    if (_prefs.begin("ai_usage", true)) {
-        _stats.dailyRequestLimit = _prefs.getUInt("limit", DEFAULT_DAILY_LIMIT);
-        _stats.requestsToday = _prefs.getUInt("req_day", 0);
-        _stats.promptTokensToday = _prefs.getUInt("tok_in", 0);
-        _stats.responseTokensToday = _prefs.getUInt("tok_out", 0);
-        _stats.totalTokensToday = _prefs.getUInt("tok_day", 0);
-        _stats.lifetimeRequests = _prefs.getUInt("req_life", 0);
-        _stats.lifetimeTokens = _prefs.getULong64("tok_life", 0);
-        _stats.lastDay = _prefs.getInt("last_day", -1);
-        _prefs.end();
+int UsageTracker::getDayOfYear() const {
+    time_t now = time(nullptr);
+    if (now < 100000) {
+        return -1;
     }
-}
-
-void UsageTracker::save() {
-    if (_prefs.begin("ai_usage", false)) {
-        _prefs.putUInt("limit", _stats.dailyRequestLimit);
-        _prefs.putUInt("req_day", _stats.requestsToday);
-        _prefs.putUInt("tok_in", _stats.promptTokensToday);
-        _prefs.putUInt("tok_out", _stats.responseTokensToday);
-        _prefs.putUInt("tok_day", _stats.totalTokensToday);
-        _prefs.putUInt("req_life", _stats.lifetimeRequests);
-        _prefs.putULong64("tok_life", _stats.lifetimeTokens);
-        _prefs.putInt("last_day", _stats.lastDay);
-        _prefs.end();
-    }
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    return timeinfo.tm_yday;
 }
 
 void UsageTracker::checkDayRollover() {
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    bool hasValidTime = (localtime_r(&now, &timeinfo) && timeinfo.tm_year > (2020 - 1900));
+    int day = getDayOfYear();
+    if (day < 0) return;
 
-    if (hasValidTime) {
-        int currentDay = timeinfo.tm_yday; // День года 0-365
-        if (_stats.lastDay == -1) {
-            // Первый запуск с валидным временем
-            _stats.lastDay = currentDay;
-            save();
-        } else if (_stats.lastDay != currentDay) {
-            // Наступили новые сутки (полночь)
-            resetDailyUsage();
-            _stats.lastDay = currentDay;
-            save();
-        }
-    } else {
-        // Резервный таймер по millis() (24 часа) если NTP недоступен
-        if (millis() - _stats.lastResetMillis >= 86400000UL) {
-            resetDailyUsage();
-            _stats.lastResetMillis = millis();
-            save();
-        }
+    if (_stats.currentDayOfYear != day) {
+        _stats.requestsToday = 0;
+        _stats.promptTokensToday = 0;
+        _stats.responseTokensToday = 0;
+        _stats.totalTokensToday = 0;
+        _stats.currentDayOfYear = day;
+        saveToNvs();
     }
-}
-
-bool UsageTracker::isLimitReached() {
-    checkDayRollover();
-    if (_stats.dailyRequestLimit == 0) return false; // Безлимитный режим
-    return (_stats.requestsToday >= _stats.dailyRequestLimit);
 }
 
 void UsageTracker::recordRequest(int promptTokens, int responseTokens, int totalTokens) {
     checkDayRollover();
+
+    unsigned long now = millis();
+    if (now - _minuteWindowStart >= 60000) {
+        _minuteWindowStart = now;
+        _stats.requestsThisMinute = 0;
+    }
+
     _stats.requestsToday++;
+    _stats.requestsThisMinute++;
     _stats.promptTokensToday += promptTokens;
     _stats.responseTokensToday += responseTokens;
     _stats.totalTokensToday += totalTokens;
 
-    _stats.lifetimeRequests++;
-    _stats.lifetimeTokens += totalTokens;
-
-    save();
+    saveToNvs();
 }
 
-DailyUsageStats UsageTracker::getStats() {
-    checkDayRollover();
-    return _stats;
+bool UsageTracker::canSendRequest() const {
+    unsigned long now = millis();
+    if (now - _minuteWindowStart < 60000) {
+        if (_stats.requestsThisMinute >= _stats.minuteLimit) {
+            return false;
+        }
+    }
+
+    if (_stats.dailyRequestLimit > 0 && _stats.requestsToday >= _stats.dailyRequestLimit) {
+        return false;
+    }
+
+    return true;
 }
 
 void UsageTracker::setDailyLimit(uint32_t limit) {
     _stats.dailyRequestLimit = limit;
-    save();
+    saveToNvs();
 }
 
-void UsageTracker::resetDailyUsage() {
+void UsageTracker::setMinuteLimit(uint32_t limit) {
+    _stats.minuteLimit = limit;
+    saveToNvs();
+}
+
+void UsageTracker::setTimezone(int offsetHours) {
+    _timezoneOffset = offsetHours;
+}
+
+DailyUsageStats UsageTracker::getStats() const {
+    DailyUsageStats s = _stats;
+    unsigned long now = millis();
+    if (now - _minuteWindowStart >= 60000) {
+        s.requestsThisMinute = 0;
+    }
+    return s;
+}
+
+void UsageTracker::resetStats() {
     _stats.requestsToday = 0;
     _stats.promptTokensToday = 0;
     _stats.responseTokensToday = 0;
     _stats.totalTokensToday = 0;
-    _stats.lastResetMillis = millis();
-    save();
+    _stats.requestsThisMinute = 0;
+    saveToNvs();
 }
 
-void UsageTracker::resetAllUsage() {
-    resetDailyUsage();
-    _stats.lifetimeRequests = 0;
-    _stats.lifetimeTokens = 0;
-    save();
-}
-
-String UsageTracker::getCurrentTimeString() const {
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    if (localtime_r(&now, &timeinfo) && timeinfo.tm_year > (2020 - 1900)) {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%02d:%02d:%02d  %02d.%02d.%04d", 
-                 timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
-                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
-        return String(buf);
+void UsageTracker::loadFromNvs() {
+    Preferences p;
+    if (p.begin(NVS_NAMESPACE, true)) {
+        _stats.requestsToday = p.getUInt("req_today", 0);
+        _stats.promptTokensToday = p.getUInt("p_tok_today", 0);
+        _stats.responseTokensToday = p.getUInt("r_tok_today", 0);
+        _stats.totalTokensToday = p.getUInt("t_tok_today", 0);
+        _stats.dailyRequestLimit = p.getUInt("d_limit", 1500);
+        _stats.minuteLimit = p.getUInt("m_limit", 15);
+        _stats.currentDayOfYear = p.getInt("day_of_year", -1);
+        p.end();
     }
-    return "Синхронизация NTP...";
 }
 
-String UsageTracker::getTimeUntilMidnight() const {
-    time_t now = time(nullptr);
-    struct tm timeinfo;
-    if (localtime_r(&now, &timeinfo) && timeinfo.tm_year > (2020 - 1900)) {
-        int hoursLeft = 23 - timeinfo.tm_hour;
-        int minsLeft = 59 - timeinfo.tm_min;
-        int secsLeft = 60 - timeinfo.tm_sec;
-        if (secsLeft == 60) { secsLeft = 0; minsLeft++; }
-        if (minsLeft == 60) { minsLeft = 0; hoursLeft++; }
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%02d ч %02d мин %02d сек", hoursLeft, minsLeft, secsLeft);
-        return String(buf);
+void UsageTracker::saveToNvs() {
+    Preferences p;
+    if (p.begin(NVS_NAMESPACE, false)) {
+        p.putUInt("req_today", _stats.requestsToday);
+        p.putUInt("p_tok_today", _stats.promptTokensToday);
+        p.putUInt("r_tok_today", _stats.responseTokensToday);
+        p.putUInt("t_tok_today", _stats.totalTokensToday);
+        p.putUInt("d_limit", _stats.dailyRequestLimit);
+        p.putUInt("m_limit", _stats.minuteLimit);
+        p.putInt("day_of_year", _stats.currentDayOfYear);
+        p.end();
     }
-    return "в 00:00 (по UTC/NTP)";
 }
 
-void UsageTracker::printQuotaReport() {
-    checkDayRollover();
-
-    uint32_t limit = _stats.dailyRequestLimit;
-    uint32_t used = _stats.requestsToday;
-    int32_t remaining = (limit > 0) ? ((int32_t)limit - (int32_t)used) : -1;
-    if (remaining < 0 && limit > 0) remaining = 0;
-
-    float percentUsed = (limit > 0) ? ((float)used / (float)limit * 100.0f) : 0.0f;
-    float percentRemaining = (limit > 0) ? (100.0f - percentUsed) : 100.0f;
-    if (percentRemaining < 0.0f) percentRemaining = 0.0f;
-
-    Serial.println(F("\n================== СУТОЧНЫЕ ЛИМИТЫ И РАСХОД (QUOTA) =================="));
-    Serial.printf(" [ВРЕМЯ УСТРОЙСТВА]   : %s\n", getCurrentTimeString().c_str());
-    if (limit > 0) {
-        Serial.printf(" [СУТОЧНЫЙ ЛИМИТ]     : %u запросов / сутки (RPD)\n", limit);
-        Serial.printf(" [ИЗРАСХОДОВАНО СЕГОДНЯ]: %u запросов (%.1f%%)\n", used, percentUsed);
-        if (remaining > 0) {
-            Serial.printf(" [ОСТАЛОСЬ НА СЕГОДНЯ]: %u запросов (%.1f%%)\n", remaining, percentRemaining);
-        } else {
-            Serial.println(F(" [ОСТАЛОСЬ НА СЕГОДНЯ]: 0 (ЛИМИТ ИСЧЕРПАН!)"));
-        }
-    } else {
-        Serial.println(F(" [СУТОЧНЫЙ ЛИМИТ]     : БЕЗЛИМИТНЫЙ РЕЖИМ (0 RPD)"));
-        Serial.printf(" [ИЗРАСХОДОВАНО СЕГОДНЯ]: %u запросов\n", used);
-    }
-    Serial.println(F("----------------------------------------------------------------------"));
-    Serial.printf(" [ТОКЕНЫ СЕГОДНЯ]     : Всего: %u (Запрос: %u, Ответ: %u)\n", 
-                  _stats.totalTokensToday, _stats.promptTokensToday, _stats.responseTokensToday);
-    Serial.printf(" [ЗА ВСЕ ВРЕМЯ]       : Всего запросов: %u | Всего токенов: %llu\n", 
-                  _stats.lifetimeRequests, _stats.lifetimeTokens);
-    Serial.printf(" [СБРОС СУТОК ЧЕРЕЗ]  : %s\n", getTimeUntilMidnight().c_str());
-    Serial.println(F("----------------------------------------------------------------------"));
-    Serial.println(F(" Команды управления квотой:"));
-    Serial.println(F("  • set limit <число>   - изменить суточный лимит (напр. 'set limit 1500', 0 = выкл)"));
-    Serial.println(F("  • reset quota         - сбросить счетчики сегодняшнего дня"));
-    Serial.println(F("  • reset allquota      - сбросить всю статистику (включая общую за все время)"));
-    Serial.println(F("======================================================================\n"));
+String UsageTracker::getUsageSummary() const {
+    DailyUsageStats s = getStats();
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "Запросы сегодня: %u / %u (RPM: %u / %u) | Токены: %u (Вход: %u, Выход: %u)",
+             s.requestsToday, s.dailyRequestLimit,
+             s.requestsThisMinute, s.minuteLimit,
+             s.totalTokensToday, s.promptTokensToday, s.responseTokensToday);
+    return String(buf);
 }
+
+#endif // GEMINI_ENABLE_USAGE_TRACKER

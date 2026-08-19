@@ -1,5 +1,7 @@
 #include "FunctionRegistry.h"
 
+#if GEMINI_ENABLE_FUNCTION_CALLING
+
 FunctionRegistry::FunctionRegistry() {
 }
 
@@ -75,3 +77,5 @@ void FunctionRegistry::appendToolsJson(JsonDocument& doc) const {
         }
     }
 }
+
+#endif // GEMINI_ENABLE_FUNCTION_CALLING

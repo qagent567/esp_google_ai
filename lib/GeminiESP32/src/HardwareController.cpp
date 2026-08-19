@@ -1,7 +1,11 @@
 #include "HardwareController.h"
-#include <WiFi.h>
+
+#if GEMINI_ENABLE_HARDWARE
+
 #include <Wire.h>
 #include <esp_system.h>
+#include <esp_wifi.h>
+#include <WiFi.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,22 +15,27 @@ uint8_t temprature_sens_read();
 }
 #endif
 
-// Список системных запрещенных пинов (Flash SPI и UART0)
-static const uint8_t FORBIDDEN_GPIOS[] = {
-    1, 3,       // UART0 TX, RX
-    6, 7, 8, 9, 10, 11 // Встроенная Flash SPI
-};
+// Список абсолютно запрещенных пинов (Flash SPI, UART0 Boot ROM)
+static const uint8_t PROHIBITED_PINS[] = {6, 7, 8, 9, 10, 11, 1, 3};
 
-HardwareController::HardwareController() : _enabled(true) {}
-HardwareController::~HardwareController() {}
+HardwareController::HardwareController()
+    : _enabled(true) {
+}
+
+HardwareController::~HardwareController() {
+}
 
 bool HardwareController::begin() {
-    // Безопасная инициализация: не трогаем пины без явного запроса пользователя
     return true;
 }
 
 void HardwareController::setAllowedPins(const std::vector<uint8_t>& allowedPins) {
-    _allowedPins = allowedPins;
+    _allowedPins.clear();
+    for (uint8_t pin : allowedPins) {
+        if (isValidGpio(pin)) {
+            _allowedPins.push_back(pin);
+        }
+    }
 }
 
 void HardwareController::allowAllSafePins() {
@@ -34,8 +43,10 @@ void HardwareController::allowAllSafePins() {
 }
 
 bool HardwareController::isPinAllowed(uint8_t pin) const {
+    if (!_enabled) return false;
     if (!isValidGpio(pin)) return false;
-    if (_allowedPins.empty()) return true; // Если белый список не задан, разрешены все безопасные пины
+    if (_allowedPins.empty()) return true;
+
     for (uint8_t p : _allowedPins) {
         if (p == pin) return true;
     }
@@ -43,66 +54,69 @@ bool HardwareController::isPinAllowed(uint8_t pin) const {
 }
 
 bool HardwareController::isValidGpio(uint8_t pin) {
-    if (pin > 39) return false;
-    for (size_t i = 0; i < sizeof(FORBIDDEN_GPIOS) / sizeof(FORBIDDEN_GPIOS[0]); i++) {
-        if (pin == FORBIDDEN_GPIOS[i]) return false;
+    for (size_t i = 0; i < sizeof(PROHIBITED_PINS); i++) {
+        if (pin == PROHIBITED_PINS[i]) return false;
     }
+    if (pin > 39) return false;
     return true;
 }
 
 bool HardwareController::setPinMode(uint8_t pin, uint8_t mode) {
-    if (!_enabled || !isPinAllowed(pin)) return false;
-    if (pin >= 34 && pin <= 39 && mode == OUTPUT) return false;
+    if (!isPinAllowed(pin)) return false;
+    if (pin >= 34 && mode != INPUT) return false;
     pinMode(pin, mode);
     return true;
 }
 
 bool HardwareController::writePin(uint8_t pin, uint8_t value) {
-    if (!_enabled || !isPinAllowed(pin)) return false;
-    if (pin >= 34 && pin <= 39) return false;
+    if (!isPinAllowed(pin)) return false;
+    if (pin >= 34) return false;
     pinMode(pin, OUTPUT);
     digitalWrite(pin, value ? HIGH : LOW);
     return true;
 }
 
 int HardwareController::readPin(uint8_t pin) {
-    if (!_enabled || !isPinAllowed(pin)) return -1;
+    if (!isPinAllowed(pin)) return -1;
     return digitalRead(pin);
 }
 
 bool HardwareController::togglePin(uint8_t pin) {
-    if (!_enabled || !isPinAllowed(pin)) return false;
-    if (pin >= 34 && pin <= 39) return false;
-    pinMode(pin, OUTPUT);
+    if (!isPinAllowed(pin)) return false;
+    if (pin >= 34) return false;
     int current = digitalRead(pin);
-    digitalWrite(pin, !current);
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, current ? LOW : HIGH);
     return true;
 }
 
 int HardwareController::readAnalogPin(uint8_t pin) {
-    if (!_enabled) return -1;
+    if (!isPinAllowed(pin)) return -1;
     if (pin != 32 && pin != 33 && pin != 34 && pin != 35 && pin != 36 && pin != 39) {
         return -1;
     }
-    if (!isPinAllowed(pin)) return -1;
+    pinMode(pin, INPUT);
     return analogRead(pin);
 }
 
 DeviceTelemetry HardwareController::getTelemetry() {
     DeviceTelemetry t;
-    #if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 4)
-        t.chipTempC = temperatureRead();
+    
+    // Чтение встроенного термодатчика ESP32
+    #if defined(temprature_sens_read) || defined(ESP32)
+    t.chipTempC = (temprature_sens_read() - 32) / 1.8f;
     #else
-        t.chipTempC = (temprature_sens_read() - 32) / 1.8f;
+    t.chipTempC = 0.0f;
     #endif
 
     t.freeHeapBytes = ESP.getFreeHeap();
     t.minFreeHeapBytes = ESP.getMinFreeHeap();
     t.heapSizeBytes = ESP.getHeapSize();
-    t.uptimeSec = millis() / 1000UL;
-    t.wifiRssi = WiFi.isConnected() ? WiFi.RSSI() : 0;
+    t.uptimeSec = millis() / 1000;
+    t.wifiRssi = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
     t.cpuFreqMHz = ESP.getCpuFreqMHz();
     t.flashSizeBytes = ESP.getFlashChipSize();
+
     return t;
 }
 
@@ -110,19 +124,21 @@ String HardwareController::getTelemetrySummary() {
     DeviceTelemetry t = getTelemetry();
     char buf[256];
     snprintf(buf, sizeof(buf),
-             "Температура чипа: %.1f °C | Свободно RAM: %u байт (Мин: %u) | Аптайм: %lu сек | Wi-Fi RSSI: %d dBm | CPU: %u МГц",
-             t.chipTempC, t.freeHeapBytes, t.minFreeHeapBytes, t.uptimeSec, t.wifiRssi, t.cpuFreqMHz);
+             "ESP32 [RAM: %u KB свободно / %u KB всего | CPU: %u MHz | Uptime: %u c | RSSI: %d dBm | Temp: %.1f °C]",
+             t.freeHeapBytes / 1024,
+             t.heapSizeBytes / 1024,
+             t.cpuFreqMHz,
+             t.uptimeSec,
+             t.wifiRssi,
+             t.chipTempC);
     return String(buf);
 }
 
 String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
-    if (!_enabled) return "Аппаратный контроллер I2C отключен.";
+    if (!_enabled) return "Аппаратный контроллер отключен.";
+
     Wire.begin(sda, scl);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "Сканирование шины I2C (SDA=%u, SCL=%u):\n", sda, scl);
-    String result;
-    result.reserve(256);
-    result = buf;
+    String result = "Сканирование I2C (SDA=" + String(sda) + ", SCL=" + String(scl) + "):\n";
     int nDevices = 0;
 
     for (uint8_t address = 1; address < 127; address++) {
@@ -130,9 +146,9 @@ String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
         uint8_t error = Wire.endTransmission();
 
         if (error == 0) {
-            char hexBuf[48];
-            snprintf(hexBuf, sizeof(hexBuf), " - Найдено устройство по адресу 0x%02X\n", address);
-            result += hexBuf;
+            char hexBuf[16];
+            snprintf(hexBuf, sizeof(hexBuf), "0x%02X", address);
+            result += " - Найден датчик/устройство по адресу: " + String(hexBuf) + "\n";
             nDevices++;
         }
     }
@@ -140,104 +156,78 @@ String HardwareController::scanI2C(uint8_t sda, uint8_t scl) {
     if (nDevices == 0) {
         result += " Устройства I2C не обнаружены.";
     } else {
-        snprintf(buf, sizeof(buf), " Всего обнаружено устройств: %d", nDevices);
-        result += buf;
+        result += "Всего устройств: " + String(nDevices);
     }
+
     return result;
 }
 
-String HardwareController::getHardwareCapabilitiesDescription() {
-    return "ИНСТРУКЦИЯ ПО АППАРАТНОМУ УПРАВЛЕНИЮ ESP32:\n"
-           "Ты — встроенный бортовой интеллект микроконтроллера ESP32 (Xtensa Dual-Core 240MHz, 4MB Flash, ~300KB RAM, Wi-Fi).\n"
-           "Ты физически работаешь внутри платы и имеешь прямой доступ к её контактам (GPIO), датчикам и интерфейсам.\n"
-           "Если пользователь просит управлять платой, включить/выключить что-либо, замерить напряжение, считать датчики или узнать состояние платы, включи в свой ответ блок команды в формате:\n"
-           "```action {\"action\": \"<имя_команды>\", ...}```\n\n"
-           "Доступные физические команды платы:\n"
-           "1. {\"action\": \"set_pin\", \"pin\": <номер GPIO>, \"value\": <0|1>} — подать логический 0 или 1 (GPIO 2 — синий бортовой светодиод).\n"
-           "2. {\"action\": \"read_pin\", \"pin\": <номер GPIO>} — считать цифровое состояние пина (0 или 1).\n"
-           "3. {\"action\": \"read_analog\", \"pin\": <32|33|34|35|36|39>} — замерить напряжение на аналоговом входе ADC1 (0-4095, 0-3.3 В).\n"
-           "4. {\"action\": \"toggle_pin\", \"pin\": <номер GPIO>} — переключить состояние выхода на противоположное.\n"
-           "5. {\"action\": \"get_telemetry\"} — считать температуру процессора, уровень свободной RAM и Wi-Fi RSSI.\n"
-           "6. {\"action\": \"scan_i2c\", \"sda\": 21, \"scl\": 22} — просканировать шину I2C на наличие внешних датчиков/экранов.\n"
-           "7. {\"action\": \"restart\"} — перезагрузить плату ESP32.\n\n"
-           "Правила общения: Отвечай кратко, уверенно и технически грамотно. Если выполняешь действие, кратко прокомментируй его.";
-}
-
 String HardwareController::executeActionJson(const String& jsonAction) {
-    if (!_enabled) {
-        return "Аппаратное управление GPIO/I2C отключено пользователем в настройках.";
-    }
+    if (!_enabled) return "Аппаратный контроллер отключен.";
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, jsonAction);
-    char buf[128];
     if (err) {
-        snprintf(buf, sizeof(buf), "Ошибка разбора команды действия JSON: %s", err.c_str());
-        return String(buf);
+        return "Ошибка парсинга действия: " + String(err.c_str());
     }
 
-    const char* action = doc["action"] | "";
-    if (strcmp(action, "set_pin") == 0) {
+    String action = doc["action"] | "";
+    if (action == "pin_write") {
         uint8_t pin = doc["pin"] | 255;
         uint8_t val = doc["value"] | 0;
-        if (!isPinAllowed(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для управления", pin);
-            return String(buf);
+        if (writePin(pin, val)) {
+            return "Успешно: GPIO " + String(pin) + " установлен в " + (val ? "HIGH (1)" : "LOW (0)");
+        } else {
+            return "Ошибка: GPIO " + String(pin) + " запрещен или недоступен для записи";
         }
-        writePin(pin, val);
-        snprintf(buf, sizeof(buf), "GPIO %u успешно установлен в %s", pin, val ? "HIGH (1)" : "LOW (0)");
-        return String(buf);
-    }
-    else if (strcmp(action, "read_pin") == 0) {
+    } else if (action == "pin_read") {
         uint8_t pin = doc["pin"] | 255;
-        if (!isPinAllowed(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен для чтения", pin);
-            return String(buf);
-        }
-        setPinMode(pin, INPUT);
         int val = readPin(pin);
-        snprintf(buf, sizeof(buf), "Значение на цифровом GPIO %u: %d", pin, val);
-        return String(buf);
-    }
-    else if (strcmp(action, "read_analog") == 0) {
+        if (val >= 0) {
+            return "GPIO " + String(pin) + " значение: " + String(val);
+        } else {
+            return "Ошибка: GPIO " + String(pin) + " запрещен или недоступен для чтения";
+        }
+    } else if (action == "pin_toggle") {
         uint8_t pin = doc["pin"] | 255;
-        if (!isPinAllowed(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: аналоговый пин GPIO %u не разрешен", pin);
-            return String(buf);
+        if (togglePin(pin)) {
+            return "Успешно: Состояние GPIO " + String(pin) + " переключено";
+        } else {
+            return "Ошибка: GPIO " + String(pin) + " запрещен";
         }
+    } else if (action == "analog_read") {
+        uint8_t pin = doc["pin"] | 255;
         int val = readAnalogPin(pin);
-        if (val < 0) {
-            snprintf(buf, sizeof(buf), "Ошибка чтения аналогового входа на GPIO %u", pin);
+        if (val >= 0) {
+            float volts = (val / 4095.0f) * 3.3f;
+            char buf[64];
+            snprintf(buf, sizeof(buf), "ADC GPIO %u: %d (%.2f В)", pin, val, volts);
             return String(buf);
+        } else {
+            return "Ошибка: Пин " + String(pin) + " не является безопасным ADC1 входом";
         }
-        float voltage = (val / 4095.0f) * 3.3f;
-        snprintf(buf, sizeof(buf), "ADC GPIO %u: %d (%.2f В)", pin, val, voltage);
-        return String(buf);
-    }
-    else if (strcmp(action, "toggle_pin") == 0) {
-        uint8_t pin = doc["pin"] | 2;
-        if (!isPinAllowed(pin)) {
-            snprintf(buf, sizeof(buf), "Ошибка: пин GPIO %u не разрешен", pin);
-            return String(buf);
-        }
-        togglePin(pin);
-        int current = readPin(pin);
-        snprintf(buf, sizeof(buf), "Состояние GPIO %u переключено. Текущий уровень: %d", pin, current);
-        return String(buf);
-    }
-    else if (strcmp(action, "get_telemetry") == 0) {
-        return getTelemetrySummary();
-    }
-    else if (strcmp(action, "scan_i2c") == 0) {
+    } else if (action == "i2c_scan") {
         uint8_t sda = doc["sda"] | 21;
         uint8_t scl = doc["scl"] | 22;
         return scanI2C(sda, scl);
-    }
-    else if (strcmp(action, "restart") == 0) {
-        ESP.restart();
-        return "Перезагрузка ESP32...";
+    } else if (action == "get_telemetry") {
+        return getTelemetrySummary();
     }
 
-    snprintf(buf, sizeof(buf), "Неизвестное действие: %s", action);
-    return String(buf);
+    return "Неизвестное действие: " + action;
 }
+
+String HardwareController::getHardwareCapabilitiesDescription() {
+    return "Ты работаешь на плате ESP32. Ты можешь управлять железом. "
+           "Если пользователь просит управлять пинами, включить свет, замерить напряжение, просканировать I2C или узнать статус — "
+           "вставь в свой ответ JSON блок ```action { \"action\": \"...\", ... } ```.\n"
+           "Доступные действия:\n"
+           "- Включить/выключить GPIO: {\"action\":\"pin_write\", \"pin\": 2, \"value\": 1}\n"
+           "- Переключить GPIO: {\"action\":\"pin_toggle\", \"pin\": 2}\n"
+           "- Прочитать цифровой вход: {\"action\":\"pin_read\", \"pin\": 4}\n"
+           "- Замерить аналоговый ADC1 вход: {\"action\":\"analog_read\", \"pin\": 34}\n"
+           "- Сканировать I2C: {\"action\":\"i2c_scan\", \"sda\": 21, \"scl\": 22}\n"
+           "- Телеметрия чипа: {\"action\":\"get_telemetry\"}";
+}
+
+#endif // GEMINI_ENABLE_HARDWARE

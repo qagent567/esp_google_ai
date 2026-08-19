@@ -1,14 +1,34 @@
 #include "GeminiClient.h"
 #include "UsageTracker.h"
 #include "HardwareController.h"
-#include "FunctionRegistry.h"
+
+#if GEMINI_ENABLE_NVS_HISTORY || true
 #include <Preferences.h>
+#endif
+
+#if GEMINI_ENABLE_VISION
 #include <mbedtls/base64.h>
+#endif
 
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker, HardwareController* hwController, FunctionRegistry* funcRegistry)
-    : _configMgr(configMgr), _usageTracker(usageTracker), _hwController(hwController), _funcRegistry(funcRegistry), _persistentHistory(false) {
+GeminiClient::GeminiClient(ConfigManager& configMgr, 
+                           UsageTracker* usageTracker, 
+                           HardwareController* hwController
+#if GEMINI_ENABLE_FUNCTION_CALLING
+                           , FunctionRegistry* funcRegistry
+#endif
+)
+    : _configMgr(configMgr)
+    , _usageTracker(usageTracker)
+    , _hwController(hwController)
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    , _funcRegistry(funcRegistry)
+#endif
+#if GEMINI_ENABLE_NVS_HISTORY
+    , _persistentHistory(false)
+#endif
+{
     loadCachedModels();
 }
 
@@ -55,6 +75,7 @@ void GeminiClient::saveCachedModels() {
     }
 }
 
+#if GEMINI_ENABLE_NVS_HISTORY
 void GeminiClient::enablePersistentHistory(bool enable) {
     _persistentHistory = enable;
     if (enable) {
@@ -98,9 +119,11 @@ void GeminiClient::saveHistoryToNvs() {
         p.end();
     }
 }
+#endif
 
 void GeminiClient::clearHistory() {
     _history.clear();
+#if GEMINI_ENABLE_NVS_HISTORY
     if (_persistentHistory) {
         Preferences p;
         if (p.begin("gem_hist", false)) {
@@ -108,6 +131,7 @@ void GeminiClient::clearHistory() {
             p.end();
         }
     }
+#endif
 }
 
 void GeminiClient::addHistory(const String& role, const String& text) {
@@ -118,11 +142,14 @@ void GeminiClient::addHistory(const String& role, const String& text) {
             _history.erase(_history.begin());
         }
     }
+#if GEMINI_ENABLE_NVS_HISTORY
     if (_persistentHistory) {
         saveHistoryToNvs();
     }
+#endif
 }
 
+#if GEMINI_ENABLE_VISION
 String GeminiClient::encodeBase64(const uint8_t* data, size_t length) {
     if (!data || length == 0) return "";
     size_t outputLen = 0;
@@ -140,6 +167,7 @@ String GeminiClient::encodeBase64(const uint8_t* data, size_t length) {
     free(buf);
     return out;
 }
+#endif
 
 String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
@@ -152,6 +180,7 @@ String GeminiClient::buildApiUrl() const {
     return String(urlBuf);
 }
 
+#if GEMINI_ENABLE_STREAMING
 String GeminiClient::buildStreamApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
     String cleanModel = cfg.model; cleanModel.trim();
@@ -162,6 +191,7 @@ String GeminiClient::buildStreamApiUrl() const {
              GEMINI_API_HOST, cleanModel.c_str(), cleanKey.c_str());
     return String(urlBuf);
 }
+#endif
 
 String GeminiClient::buildRequestBody(const String& prompt) const {
     const AppConfig& cfg = _configMgr.getConfig();
@@ -182,6 +212,7 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
 
     // Системный промпт + инструкции аппаратного управления ESP32
     String effectiveSysPrompt = cfg.systemPrompt;
+#if GEMINI_ENABLE_HARDWARE
     if (_hwController && _hwController->isEnabled()) {
         String hwPrompt = HardwareController::getHardwareCapabilitiesDescription();
         if (effectiveSysPrompt.isEmpty()) {
@@ -190,6 +221,7 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
             effectiveSysPrompt += "\n\n" + hwPrompt;
         }
     }
+#endif
 
     if (!effectiveSysPrompt.isEmpty()) {
         JsonObject systemInstruction = doc["systemInstruction"].to<JsonObject>();
@@ -198,10 +230,12 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
         sysText["text"] = effectiveSysPrompt;
     }
 
+#if GEMINI_ENABLE_FUNCTION_CALLING
     // Регистрация нативных C++ инструментов (Function Calling)
     if (_funcRegistry && _funcRegistry->hasFunctions()) {
         _funcRegistry->appendToolsJson(doc);
     }
+#endif
 
     // Конфигурация генерации
     JsonObject genConfig = doc["generationConfig"].to<JsonObject>();
@@ -213,6 +247,7 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
     return jsonOutput;
 }
 
+#if GEMINI_ENABLE_VISION
 String GeminiClient::buildRequestBodyWithImage(const String& prompt, 
                                                const uint8_t* imageData, 
                                                size_t imageSize, 
@@ -251,6 +286,7 @@ String GeminiClient::buildRequestBodyWithImage(const String& prompt,
     serializeJson(doc, jsonOutput);
     return jsonOutput;
 }
+#endif
 
 bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& response) {
     if (jsonPayload.isEmpty()) {
@@ -288,6 +324,7 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         if (cand["content"] && cand["content"]["parts"] && cand["content"]["parts"].is<JsonArray>() && cand["content"]["parts"].size() > 0) {
             JsonArray parts = cand["content"]["parts"].as<JsonArray>();
             for (JsonObject part : parts) {
+#if GEMINI_ENABLE_FUNCTION_CALLING
                 // 1. Проверка на Function Call от Google API
                 if (part["functionCall"]) {
                     JsonObject fc = part["functionCall"];
@@ -309,6 +346,7 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
                         return true;
                     }
                 }
+#endif
 
                 // 2. Обычный текстовый ответ
                 const char* generatedText = part["text"];
@@ -341,6 +379,7 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
 }
 
 void GeminiClient::processHardwareActions(GeminiResponse& response) {
+#if GEMINI_ENABLE_HARDWARE
     if (!response.success || _hwController == nullptr || response.text.isEmpty()) return;
 
     int startPos = -1;
@@ -367,6 +406,7 @@ void GeminiClient::processHardwareActions(GeminiResponse& response) {
         response.text += "\n\n[Выполнение на ESP32]: ";
         response.text += actionResult;
     }
+#endif
 }
 
 String GeminiClient::getHttpErrorDescription(int httpCode) {
@@ -394,12 +434,14 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+#if GEMINI_ENABLE_FUNCTION_CALLING
     result.hasFunctionCall = false;
+#endif
 
     const AppConfig& cfg = _configMgr.getConfig();
 
     if (cfg.apiKey.isEmpty()) {
-        result.text = "Ошибка: API-ключ Gemini не настроен! Задайте его командой 'set key <api_key>'.";
+        result.text = "Ошибка: API-ключ Gemini не настроен!";
         return result;
     }
 
@@ -416,7 +458,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
         WiFiClientSecure client;
         client.setInsecure();
-        client.setTimeout(30);
+        client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
 
         HTTPClient http;
         if (!http.begin(client, url)) {
@@ -427,7 +469,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
 
         http.addHeader("Content-Type", "application/json; charset=utf-8");
         http.addHeader("x-goog-api-key", cfg.apiKey);
-        http.setTimeout(30000);
+        http.setTimeout(GEMINI_HTTP_TIMEOUT_MS);
 
         int httpResponseCode = http.POST(requestBody);
         result.httpCode = httpResponseCode;
@@ -439,14 +481,23 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
                 parseResponse(payload, result);
                 http.end();
                 
+#if GEMINI_ENABLE_FUNCTION_CALLING
                 if (result.success && !result.hasFunctionCall) {
                     addHistory("user", prompt);
                     addHistory("model", result.text);
                 }
+#else
+                if (result.success) {
+                    addHistory("user", prompt);
+                    addHistory("model", result.text);
+                }
+#endif
 
+#if GEMINI_ENABLE_USAGE_TRACKER
                 if (_usageTracker && result.success) {
                     _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
                 }
+#endif
 
                 processHardwareActions(result);
                 return result;
@@ -486,6 +537,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     return result;
 }
 
+#if GEMINI_ENABLE_VISION
 GeminiResponse GeminiClient::askWithImage(const String& prompt, 
                                           const uint8_t* imageData, 
                                           size_t imageSize, 
@@ -495,7 +547,9 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+#if GEMINI_ENABLE_FUNCTION_CALLING
     result.hasFunctionCall = false;
+#endif
 
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -520,7 +574,7 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(35);
+    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000 + 5);
 
     HTTPClient http;
     if (!http.begin(client, url)) {
@@ -531,7 +585,7 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
 
     http.addHeader("Content-Type", "application/json; charset=utf-8");
     http.addHeader("x-goog-api-key", cfg.apiKey);
-    http.setTimeout(35000);
+    http.setTimeout(GEMINI_HTTP_TIMEOUT_MS + 5000);
 
     int httpResponseCode = http.POST(requestBody);
     result.httpCode = httpResponseCode;
@@ -542,9 +596,11 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
         parseResponse(payload, result);
         http.end();
 
+#if GEMINI_ENABLE_USAGE_TRACKER
         if (_usageTracker && result.success) {
             _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
         }
+#endif
 
         processHardwareActions(result);
         return result;
@@ -560,14 +616,18 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
         return result;
     }
 }
+#endif
 
+#if GEMINI_ENABLE_STREAMING
 GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
     GeminiResponse result;
     result.success = false;
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+#if GEMINI_ENABLE_FUNCTION_CALLING
     result.hasFunctionCall = false;
+#endif
 
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -587,7 +647,7 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
 
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(30);
+    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
 
     HTTPClient http;
     if (!http.begin(client, url)) {
@@ -598,7 +658,7 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
 
     http.addHeader("Content-Type", "application/json; charset=utf-8");
     http.addHeader("x-goog-api-key", cfg.apiKey);
-    http.setTimeout(30000);
+    http.setTimeout(GEMINI_HTTP_TIMEOUT_MS);
 
     int httpResponseCode = http.POST(requestBody);
     result.httpCode = httpResponseCode;
@@ -646,9 +706,11 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
         result.candidateTokens = accumulatedText.length() / 4;
         result.totalTokens = result.promptTokens + result.candidateTokens;
         
+#if GEMINI_ENABLE_USAGE_TRACKER
         if (_usageTracker) {
             _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
         }
+#endif
 
         addHistory("user", prompt);
         addHistory("model", accumulatedText);
@@ -667,27 +729,7 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
         return result;
     }
 }
-
-static String formatTokensShort(uint32_t tokens) {
-    if (tokens == 0) return "-";
-    char buf[16];
-    if (tokens >= 1000000) {
-        if (tokens % 1000000 == 0) {
-            snprintf(buf, sizeof(buf), "%uM", tokens / 1000000);
-        } else {
-            snprintf(buf, sizeof(buf), "%.1fM", (float)tokens / 1000000.0f);
-        }
-    } else if (tokens >= 1000) {
-        if (tokens % 1000 == 0) {
-            snprintf(buf, sizeof(buf), "%uK", tokens / 1000);
-        } else {
-            snprintf(buf, sizeof(buf), "%.1fK", (float)tokens / 1000.0f);
-        }
-    } else {
-        snprintf(buf, sizeof(buf), "%u", tokens);
-    }
-    return String(buf);
-}
+#endif
 
 bool GeminiClient::listAvailableModels() {
     const AppConfig& cfg = _configMgr.getConfig();

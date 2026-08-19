@@ -1,71 +1,69 @@
 #pragma once
 
+#include "GeminiConfig.h"
+
+#if GEMINI_ENABLE_USAGE_TRACKER
+
 #include <Arduino.h>
 #include <Preferences.h>
-#include <time.h>
 
 /**
- * @brief Структура суточной статистики использования Gemini API
+ * @brief Структура статистики суточного использования Gemini API
  */
 struct DailyUsageStats {
-    uint32_t dailyRequestLimit;   // Суточный лимит запросов (по умолчанию 1500 для Free Tier Gemini Flash)
-    uint32_t requestsToday;       // Количество запросов, сделанных за текущие сутки
-    uint32_t promptTokensToday;   // Входные токены за сегодня
-    uint32_t responseTokensToday; // Выходные токены за сегодня
-    uint32_t totalTokensToday;    // Суммарные токены за сегодня
-    uint32_t lifetimeRequests;    // Всего запросов за все время
-    uint64_t lifetimeTokens;      // Всего токенов за все время
-    int lastDay;                  // День года (0-365) для отслеживания смены суток
-    unsigned long lastResetMillis;// Время последнего сброса по таймеру millis() (fallback)
+    uint32_t requestsToday;      ///< Количество отправленных запросов за текущие сутки
+    uint32_t promptTokensToday;  ///< Сумма входных токенов за сегодня
+    uint32_t responseTokensToday;///< Сумма токенов ответа за сегодня
+    uint32_t totalTokensToday;   ///< Суммарно потрачено токенов сегодня
+    uint32_t dailyRequestLimit;  ///< Суточный лимит запросов (RPD)
+    uint32_t requestsThisMinute; ///< Количество запросов за текущую минуту (RPM)
+    uint32_t minuteLimit;        ///< Лимит запросов в минуту (RPM, обычно 15)
+    int currentDayOfYear;        ///< День года (1-366) для авто-сброса в полночь
 };
 
 /**
- * @brief Класс учета расхода суточных квот и токенов Gemini API
+ * @brief Класс трекера использования квот и расхода токенов Google AI Studio
  */
 class UsageTracker {
 public:
     UsageTracker();
+    ~UsageTracker();
 
     bool begin();
 
-    // Синхронизация NTP для точного сброса в 00:00 местного времени
-    void syncNTP(int gmtOffsetHours = 3);
-
-    // Проверка наступления новых суток и сброс суточных счетчиков
-    void checkDayRollover();
-
-    // Проверка, не исчерпан ли суточный лимит
-    bool isLimitReached();
-
-    // Учет выполненного запроса
+    // Фиксация совершенного запроса
     void recordRequest(int promptTokens, int responseTokens, int totalTokens);
 
-    // Получение текущей статистики
-    DailyUsageStats getStats();
+    // Проверка, не исчерпан ли суточный или минутный лимит
+    bool canSendRequest() const;
 
     // Установка суточного лимита
     void setDailyLimit(uint32_t limit);
 
-    // Ручной сброс суточных счетчиков
-    void resetDailyUsage();
+    // Установка минутного лимита (RPM)
+    void setMinuteLimit(uint32_t limit);
 
-    // Полный сброс всей статистики
-    void resetAllUsage();
+    // Установка часового пояса (для правильного определения полуночи)
+    void setTimezone(int offsetHours);
 
-    // Форматированная строка времени устройства
-    String getCurrentTimeString() const;
+    // Получение текущей статистики
+    DailyUsageStats getStats() const;
 
-    // Время до сброса суточного лимита (в 00:00)
-    String getTimeUntilMidnight() const;
+    // Сброс статистики
+    void resetStats();
 
-    // Вывод красивого отчета о квотах в Serial
-    void printQuotaReport();
+    // Форматированная строка статистики
+    String getUsageSummary() const;
 
 private:
-    void load();
-    void save();
+    void loadFromNvs();
+    void saveToNvs();
+    void checkDayRollover();
+    int getDayOfYear() const;
 
-    Preferences _prefs;
     DailyUsageStats _stats;
-    bool _ntpSynced;
+    int _timezoneOffset;
+    unsigned long _minuteWindowStart;
 };
+
+#endif // GEMINI_ENABLE_USAGE_TRACKER

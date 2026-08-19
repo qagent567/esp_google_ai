@@ -1,12 +1,15 @@
 #include "GeminiESP32.h"
 
+#if GEMINI_ENABLE_ASYNC
 struct AsyncQueryContext {
     GeminiClient* client;
     String prompt;
     GeminiResponseCallback onResponse;
     GeminiTextCallback onText;
+#if GEMINI_ENABLE_STREAMING
     GeminiStreamCallback onChunk;
     bool isStream;
+#endif
     bool isTextOnly;
     volatile bool* pBusyFlag;
 };
@@ -14,19 +17,23 @@ struct AsyncQueryContext {
 static void geminiAsyncWorker(void* pvParameters) {
     AsyncQueryContext* ctx = static_cast<AsyncQueryContext*>(pvParameters);
     if (ctx && ctx->client) {
+#if GEMINI_ENABLE_STREAMING
         if (ctx->isStream) {
             GeminiResponse resp = ctx->client->streamAsk(ctx->prompt, ctx->onChunk);
             if (ctx->onResponse) {
                 ctx->onResponse(resp);
             }
         } else {
+#endif
             GeminiResponse resp = ctx->client->ask(ctx->prompt);
             if (ctx->isTextOnly) {
                 if (ctx->onText) ctx->onText(resp.text);
             } else {
                 if (ctx->onResponse) ctx->onResponse(resp);
             }
+#if GEMINI_ENABLE_STREAMING
         }
+#endif
     }
     if (ctx && ctx->pBusyFlag) {
         *(ctx->pBusyFlag) = false;
@@ -34,10 +41,35 @@ static void geminiAsyncWorker(void* pvParameters) {
     delete ctx;
     vTaskDelete(NULL);
 }
+#endif
 
 GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
-    : _hardwareEnabled(true), _smartDnsEnabled(true), _isBusy(false) {
-    _client = new GeminiClient(_config, &_usage, &_hardware, &_functions);
+#if GEMINI_ENABLE_HARDWARE
+    : _hardwareEnabled(true)
+    , _smartDnsEnabled(true)
+#else
+    : _smartDnsEnabled(true)
+#endif
+#if GEMINI_ENABLE_ASYNC
+    , _isBusy(false)
+#endif
+{
+    _client = new GeminiClient(
+        _config
+#if GEMINI_ENABLE_USAGE_TRACKER
+        , &_usage
+#else
+        , nullptr
+#endif
+#if GEMINI_ENABLE_HARDWARE
+        , &_hardware
+#else
+        , nullptr
+#endif
+#if GEMINI_ENABLE_FUNCTION_CALLING
+        , &_functions
+#endif
+    );
     
     if (apiKey.length() > 0) {
         _config.setApiKey(apiKey);
@@ -48,7 +80,9 @@ GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
 }
 
 GeminiESP32::~GeminiESP32() {
+#if GEMINI_ENABLE_WEB_DASHBOARD
     stopWebDashboard();
+#endif
     if (_client) {
         delete _client;
         _client = nullptr;
@@ -60,8 +94,14 @@ void GeminiESP32::begin(const String& apiKey, bool autoSmartDns) {
     if (apiKey.length() > 0) {
         _config.setApiKey(apiKey);
     }
+
+#if GEMINI_ENABLE_USAGE_TRACKER
     _usage.begin();
+#endif
+
+#if GEMINI_ENABLE_HARDWARE
     _hardware.begin();
+#endif
     
     _smartDnsEnabled = autoSmartDns;
     if (_smartDnsEnabled) {
@@ -108,12 +148,24 @@ void GeminiESP32::setSmartDns(const char* primary, const char* secondary) {
     dns_setserver(1, &dns2);
 }
 
+#if GEMINI_ENABLE_HARDWARE
 void GeminiESP32::enableHardwareControl(bool enable) {
     _hardwareEnabled = enable;
     _hardware.setEnabled(enable);
     if (_client) {
         delete _client;
-        _client = new GeminiClient(_config, &_usage, enable ? &_hardware : nullptr, &_functions);
+        _client = new GeminiClient(
+            _config
+#if GEMINI_ENABLE_USAGE_TRACKER
+            , &_usage
+#else
+            , nullptr
+#endif
+            , enable ? &_hardware : nullptr
+#if GEMINI_ENABLE_FUNCTION_CALLING
+            , &_functions
+#endif
+        );
     }
 }
 
@@ -124,14 +176,17 @@ void GeminiESP32::setAllowedPins(const std::vector<uint8_t>& allowedPins) {
 void GeminiESP32::allowAllSafePins() {
     _hardware.allowAllSafePins();
 }
+#endif
 
 void GeminiESP32::clearHistory() {
     if (_client) _client->clearHistory();
 }
 
+#if GEMINI_ENABLE_NVS_HISTORY
 void GeminiESP32::enablePersistentHistory(bool enable) {
     if (_client) _client->enablePersistentHistory(enable);
 }
+#endif
 
 String GeminiESP32::ask(const String& prompt) {
     if (!_client) return "Клиент Gemini не инициализирован";
@@ -149,6 +204,7 @@ GeminiResponse GeminiESP32::query(const String& prompt) {
     return _client->ask(prompt);
 }
 
+#if GEMINI_ENABLE_VISION
 String GeminiESP32::askWithImage(const String& prompt, 
                                  const uint8_t* imageData, 
                                  size_t imageSize, 
@@ -170,7 +226,9 @@ GeminiResponse GeminiESP32::queryWithImage(const String& prompt,
     }
     return _client->askWithImage(prompt, imageData, imageSize, mimeType);
 }
+#endif
 
+#if GEMINI_ENABLE_STREAMING
 GeminiResponse GeminiESP32::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
     if (!_client) {
         GeminiResponse err;
@@ -180,7 +238,9 @@ GeminiResponse GeminiESP32::streamAsk(const String& prompt, GeminiStreamCallback
     }
     return _client->streamAsk(prompt, onChunk);
 }
+#endif
 
+#if GEMINI_ENABLE_ASYNC
 bool GeminiESP32::askAsync(const String& prompt, GeminiTextCallback onResponse) {
     if (_isBusy || !_client) return false;
     _isBusy = true;
@@ -190,19 +250,21 @@ bool GeminiESP32::askAsync(const String& prompt, GeminiTextCallback onResponse) 
     ctx->prompt = prompt;
     ctx->onText = onResponse;
     ctx->onResponse = nullptr;
+#if GEMINI_ENABLE_STREAMING
     ctx->onChunk = nullptr;
     ctx->isStream = false;
+#endif
     ctx->isTextOnly = true;
     ctx->pBusyFlag = &_isBusy;
 
     BaseType_t res = xTaskCreatePinnedToCore(
         geminiAsyncWorker,
         "gemini_async",
-        8192,
+        GEMINI_ASYNC_STACK_SIZE,
         ctx,
-        1,
+        GEMINI_ASYNC_TASK_PRIORITY,
         NULL,
-        0
+        GEMINI_ASYNC_TASK_CORE
     );
 
     if (res != pdPASS) {
@@ -222,19 +284,21 @@ bool GeminiESP32::queryAsync(const String& prompt, GeminiResponseCallback onResp
     ctx->prompt = prompt;
     ctx->onText = nullptr;
     ctx->onResponse = onResponse;
+#if GEMINI_ENABLE_STREAMING
     ctx->onChunk = nullptr;
     ctx->isStream = false;
+#endif
     ctx->isTextOnly = false;
     ctx->pBusyFlag = &_isBusy;
 
     BaseType_t res = xTaskCreatePinnedToCore(
         geminiAsyncWorker,
         "gemini_async",
-        8192,
+        GEMINI_ASYNC_STACK_SIZE,
         ctx,
-        1,
+        GEMINI_ASYNC_TASK_PRIORITY,
         NULL,
-        0
+        GEMINI_ASYNC_TASK_CORE
     );
 
     if (res != pdPASS) {
@@ -245,6 +309,7 @@ bool GeminiESP32::queryAsync(const String& prompt, GeminiResponseCallback onResp
     return true;
 }
 
+#if GEMINI_ENABLE_STREAMING
 bool GeminiESP32::streamAskAsync(const String& prompt, GeminiStreamCallback onChunk, GeminiResponseCallback onComplete) {
     if (_isBusy || !_client) return false;
     _isBusy = true;
@@ -262,11 +327,11 @@ bool GeminiESP32::streamAskAsync(const String& prompt, GeminiStreamCallback onCh
     BaseType_t res = xTaskCreatePinnedToCore(
         geminiAsyncWorker,
         "gemini_stream",
-        8192,
+        GEMINI_ASYNC_STACK_SIZE,
         ctx,
-        1,
+        GEMINI_ASYNC_TASK_PRIORITY,
         NULL,
-        0
+        GEMINI_ASYNC_TASK_CORE
     );
 
     if (res != pdPASS) {
@@ -276,7 +341,10 @@ bool GeminiESP32::streamAskAsync(const String& prompt, GeminiStreamCallback onCh
     }
     return true;
 }
+#endif
+#endif
 
+#if GEMINI_ENABLE_FUNCTION_CALLING
 void GeminiESP32::registerFunction(const String& name, 
                                   const String& description, 
                                   const std::vector<FunctionParam>& params, 
@@ -289,7 +357,9 @@ void GeminiESP32::registerFunction(const String& name,
                                   FunctionHandler handler) {
     _functions.registerFunction(name, description, handler);
 }
+#endif
 
+#if GEMINI_ENABLE_WEB_DASHBOARD
 bool GeminiESP32::startWebDashboard(uint16_t port, bool inBackground) {
     return _dashboard.begin(this, port, inBackground);
 }
@@ -297,6 +367,7 @@ bool GeminiESP32::startWebDashboard(uint16_t port, bool inBackground) {
 void GeminiESP32::stopWebDashboard() {
     _dashboard.stop();
 }
+#endif
 
 bool GeminiESP32::ping() {
     if (!_client) return false;
