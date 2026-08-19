@@ -1,12 +1,14 @@
 #include "GeminiClient.h"
 #include "UsageTracker.h"
 #include "HardwareController.h"
+#include "FunctionRegistry.h"
 #include <Preferences.h>
+#include <mbedtls/base64.h>
 
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker, HardwareController* hwController)
-    : _configMgr(configMgr), _usageTracker(usageTracker), _hwController(hwController), _persistentHistory(false) {
+GeminiClient::GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker, HardwareController* hwController, FunctionRegistry* funcRegistry)
+    : _configMgr(configMgr), _usageTracker(usageTracker), _hwController(hwController), _funcRegistry(funcRegistry), _persistentHistory(false) {
     loadCachedModels();
 }
 
@@ -28,7 +30,7 @@ void GeminiClient::loadCachedModels() {
             _cachedModels.clear();
             for (size_t i = 0; i < count; i++) {
                 char key[16];
-                snprintf(key, sizeof(key), "m_%u", i);
+                snprintf(key, sizeof(key), "m_%u", (unsigned int)i);
                 String name = p.getString(key, "");
                 if (!name.isEmpty()) {
                     _cachedModels.push_back(name);
@@ -46,7 +48,7 @@ void GeminiClient::saveCachedModels() {
         p.putUInt("count", _cachedModels.size());
         for (size_t i = 0; i < _cachedModels.size(); i++) {
             char key[16];
-            snprintf(key, sizeof(key), "m_%u", i);
+            snprintf(key, sizeof(key), "m_%u", (unsigned int)i);
             p.putString(key, _cachedModels[i]);
         }
         p.end();
@@ -121,6 +123,24 @@ void GeminiClient::addHistory(const String& role, const String& text) {
     }
 }
 
+String GeminiClient::encodeBase64(const uint8_t* data, size_t length) {
+    if (!data || length == 0) return "";
+    size_t outputLen = 0;
+    mbedtls_base64_encode(nullptr, 0, &outputLen, data, length);
+    if (outputLen == 0) return "";
+    
+    char* buf = (char*)malloc(outputLen + 1);
+    if (!buf) return "";
+    
+    String out = "";
+    if (mbedtls_base64_encode((unsigned char*)buf, outputLen + 1, &outputLen, data, length) == 0) {
+        buf[outputLen] = '\0';
+        out = String(buf);
+    }
+    free(buf);
+    return out;
+}
+
 String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
     String cleanModel = cfg.model; cleanModel.trim();
@@ -162,19 +182,67 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
 
     // Системный промпт + инструкции аппаратного управления ESP32
     String effectiveSysPrompt = cfg.systemPrompt;
-    if (_hwController != nullptr) {
-        if (!effectiveSysPrompt.isEmpty()) effectiveSysPrompt += "\n\n";
-        effectiveSysPrompt += HardwareController::getHardwareCapabilitiesDescription();
+    if (_hwController && _hwController->isEnabled()) {
+        String hwPrompt = HardwareController::getHardwareCapabilitiesDescription();
+        if (effectiveSysPrompt.isEmpty()) {
+            effectiveSysPrompt = hwPrompt;
+        } else {
+            effectiveSysPrompt += "\n\n" + hwPrompt;
+        }
     }
 
     if (!effectiveSysPrompt.isEmpty()) {
-        JsonObject sysInst = doc["systemInstruction"].to<JsonObject>();
-        JsonArray sysParts = sysInst["parts"].to<JsonArray>();
-        JsonObject sysText = sysParts.add<JsonObject>();
+        JsonObject systemInstruction = doc["systemInstruction"].to<JsonObject>();
+        JsonArray parts = systemInstruction["parts"].to<JsonArray>();
+        JsonObject sysText = parts.add<JsonObject>();
         sysText["text"] = effectiveSysPrompt;
     }
 
-    // Параметры генерации
+    // Регистрация нативных C++ инструментов (Function Calling)
+    if (_funcRegistry && _funcRegistry->hasFunctions()) {
+        _funcRegistry->appendToolsJson(doc);
+    }
+
+    // Конфигурация генерации
+    JsonObject genConfig = doc["generationConfig"].to<JsonObject>();
+    genConfig["temperature"] = cfg.temperature;
+    genConfig["maxOutputTokens"] = cfg.maxTokens;
+
+    String jsonOutput;
+    serializeJson(doc, jsonOutput);
+    return jsonOutput;
+}
+
+String GeminiClient::buildRequestBodyWithImage(const String& prompt, 
+                                               const uint8_t* imageData, 
+                                               size_t imageSize, 
+                                               const String& mimeType) const {
+    const AppConfig& cfg = _configMgr.getConfig();
+    JsonDocument doc;
+
+    JsonArray contents = doc["contents"].to<JsonArray>();
+    JsonObject userMsg = contents.add<JsonObject>();
+    userMsg["role"] = "user";
+    JsonArray parts = userMsg["parts"].to<JsonArray>();
+
+    // Текстовая часть промпта
+    JsonObject textPart = parts.add<JsonObject>();
+    textPart["text"] = prompt;
+
+    // Изображение в Base64
+    JsonObject imagePart = parts.add<JsonObject>();
+    JsonObject inlineData = imagePart["inline_data"].to<JsonObject>();
+    inlineData["mime_type"] = mimeType;
+    inlineData["data"] = encodeBase64(imageData, imageSize);
+
+    // Системный промпт
+    if (!cfg.systemPrompt.isEmpty()) {
+        JsonObject systemInstruction = doc["systemInstruction"].to<JsonObject>();
+        JsonArray sParts = systemInstruction["parts"].to<JsonArray>();
+        sParts.add<JsonObject>()["text"] = cfg.systemPrompt;
+    }
+
+    // Конфигурация генерации
     JsonObject genConfig = doc["generationConfig"].to<JsonObject>();
     genConfig["temperature"] = cfg.temperature;
     genConfig["maxOutputTokens"] = cfg.maxTokens;
@@ -185,52 +253,73 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
 }
 
 bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& response) {
-    JsonDocument doc;
-    JsonDocument filter;
-    filter["candidates"][0]["content"]["parts"][0]["text"] = true;
-    filter["candidates"][0]["finishReason"] = true;
-    filter["usageMetadata"]["promptTokenCount"] = true;
-    filter["usageMetadata"]["candidatesTokenCount"] = true;
-    filter["usageMetadata"]["totalTokenCount"] = true;
-    filter["error"]["message"] = true;
-    filter["error"]["status"] = true;
-    filter["error"]["code"] = true;
-
-    DeserializationError err = deserializeJson(doc, jsonPayload, DeserializationOption::Filter(filter));
-    if (err) {
-        err = deserializeJson(doc, jsonPayload);
-        if (err) {
-            response.success = false;
-            char errBuf[300];
-            snprintf(errBuf, sizeof(errBuf), "Ошибка парсинга ответа: %s\nСырой ответ сервера: %.200s", 
-                     err.c_str(), jsonPayload.c_str());
-            response.text = String(errBuf);
-            return false;
-        }
+    if (jsonPayload.isEmpty()) {
+        response.success = false;
+        response.text = "Ошибка: Получен пустой ответ от Google API.";
+        return false;
     }
 
-    if (doc["error"]) {
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, jsonPayload);
+
+    if (error) {
         response.success = false;
-        const char* errMsg = doc["error"]["message"] | "Неизвестная ошибка API";
-        const char* errStatus = doc["error"]["status"] | "ERROR";
-        int errCode = doc["error"]["code"] | 0;
-        char errBuf[256];
-        snprintf(errBuf, sizeof(errBuf), "[Google API: %s (%d)] %s", errStatus, errCode, errMsg);
+        char errBuf[128];
+        snprintf(errBuf, sizeof(errBuf), "Ошибка парсинга JSON ответа: %s", error.c_str());
         response.text = String(errBuf);
         return false;
     }
 
+    // Проверка на ошибку API от Google
+    if (doc["error"]) {
+        response.success = false;
+        const char* errMsg = doc["error"]["message"];
+        int errCode = doc["error"]["code"] | 0;
+        char errBuf[256];
+        snprintf(errBuf, sizeof(errBuf), "Ошибка Google API [%d]: %s", errCode, errMsg ? errMsg : "Неизвестно");
+        response.text = String(errBuf);
+        return false;
+    }
+
+    // Извлечение candidates
     if (doc["candidates"] && doc["candidates"].is<JsonArray>() && doc["candidates"].size() > 0) {
         JsonObject cand = doc["candidates"][0];
+        
         if (cand["content"] && cand["content"]["parts"] && cand["content"]["parts"].is<JsonArray>() && cand["content"]["parts"].size() > 0) {
-            const char* generatedText = cand["content"]["parts"][0]["text"];
-            if (generatedText != nullptr) {
-                response.success = true;
-                response.text = String(generatedText);
-                response.promptTokens = doc["usageMetadata"]["promptTokenCount"] | 0;
-                response.candidateTokens = doc["usageMetadata"]["candidatesTokenCount"] | 0;
-                response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | (response.promptTokens + response.candidateTokens);
-                return true;
+            JsonArray parts = cand["content"]["parts"].as<JsonArray>();
+            for (JsonObject part : parts) {
+                // 1. Проверка на Function Call от Google API
+                if (part["functionCall"]) {
+                    JsonObject fc = part["functionCall"];
+                    const char* fnName = fc["name"];
+                    if (fnName) {
+                        response.hasFunctionCall = true;
+                        response.functionName = String(fnName);
+                        if (_funcRegistry) {
+                            JsonObjectConst args = fc["args"].as<JsonObjectConst>();
+                            response.functionResult = _funcRegistry->execute(response.functionName, args);
+                            response.text = "[Вызов функции " + response.functionName + "]: " + response.functionResult;
+                        } else {
+                            response.text = "[Вызов функции " + response.functionName + "]";
+                        }
+                        response.success = true;
+                        response.promptTokens = doc["usageMetadata"]["promptTokenCount"] | 0;
+                        response.candidateTokens = doc["usageMetadata"]["candidatesTokenCount"] | 0;
+                        response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | (response.promptTokens + response.candidateTokens);
+                        return true;
+                    }
+                }
+
+                // 2. Обычный текстовый ответ
+                const char* generatedText = part["text"];
+                if (generatedText != nullptr) {
+                    response.success = true;
+                    response.text = String(generatedText);
+                    response.promptTokens = doc["usageMetadata"]["promptTokenCount"] | 0;
+                    response.candidateTokens = doc["usageMetadata"]["candidatesTokenCount"] | 0;
+                    response.totalTokens = doc["usageMetadata"]["totalTokenCount"] | (response.promptTokens + response.candidateTokens);
+                    return true;
+                }
             }
         }
         
@@ -305,6 +394,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+    result.hasFunctionCall = false;
 
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -349,9 +439,13 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
                 parseResponse(payload, result);
                 http.end();
                 
-                if (result.success) {
+                if (result.success && !result.hasFunctionCall) {
                     addHistory("user", prompt);
-                    addHistory("model", result.text); // Сохраняем чистый ответ нейросети (до отчета ESP32)
+                    addHistory("model", result.text);
+                }
+
+                if (_usageTracker && result.success) {
+                    _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
                 }
 
                 processHardwareActions(result);
@@ -392,12 +486,88 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     return result;
 }
 
+GeminiResponse GeminiClient::askWithImage(const String& prompt, 
+                                          const uint8_t* imageData, 
+                                          size_t imageSize, 
+                                          const String& mimeType) {
+    GeminiResponse result;
+    result.success = false;
+    result.httpCode = 0;
+    result.totalTokens = 0;
+    result.durationMs = 0;
+    result.hasFunctionCall = false;
+
+    const AppConfig& cfg = _configMgr.getConfig();
+
+    if (cfg.apiKey.isEmpty()) {
+        result.text = "Ошибка: API-ключ Gemini не настроен!";
+        return result;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        result.text = "Ошибка: Нет подключения к Wi-Fi сети!";
+        return result;
+    }
+
+    if (!imageData || imageSize == 0) {
+        result.text = "Ошибка: Буфер изображения пуст!";
+        return result;
+    }
+
+    unsigned long startTime = millis();
+    String url = buildApiUrl();
+    String requestBody = buildRequestBodyWithImage(prompt, imageData, imageSize, mimeType);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(35);
+
+    HTTPClient http;
+    if (!http.begin(client, url)) {
+        result.text = "Ошибка: Не удалось инициализировать HTTPS соединение.";
+        result.durationMs = millis() - startTime;
+        return result;
+    }
+
+    http.addHeader("Content-Type", "application/json; charset=utf-8");
+    http.addHeader("x-goog-api-key", cfg.apiKey);
+    http.setTimeout(35000);
+
+    int httpResponseCode = http.POST(requestBody);
+    result.httpCode = httpResponseCode;
+    result.durationMs = millis() - startTime;
+
+    if (httpResponseCode == 200) {
+        String payload = http.getString();
+        parseResponse(payload, result);
+        http.end();
+
+        if (_usageTracker && result.success) {
+            _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
+        }
+
+        processHardwareActions(result);
+        return result;
+    } else {
+        String payload = http.getString();
+        parseResponse(payload, result);
+        if (result.text.isEmpty() || result.text.startsWith("Не удалось извлечь")) {
+            char errHdr[128];
+            snprintf(errHdr, sizeof(errHdr), "Ошибка HTTP %d: %s", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
+            result.text = errHdr;
+        }
+        http.end();
+        return result;
+    }
+}
+
 GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
     GeminiResponse result;
     result.success = false;
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+    result.hasFunctionCall = false;
 
     const AppConfig& cfg = _configMgr.getConfig();
 
@@ -505,225 +675,113 @@ static String formatTokensShort(uint32_t tokens) {
         if (tokens % 1000000 == 0) {
             snprintf(buf, sizeof(buf), "%uM", tokens / 1000000);
         } else {
-            snprintf(buf, sizeof(buf), "%.1fM", tokens / 1000000.0f);
+            snprintf(buf, sizeof(buf), "%.1fM", (float)tokens / 1000000.0f);
         }
-        return String(buf);
-    }
-    if (tokens >= 1000) {
+    } else if (tokens >= 1000) {
         if (tokens % 1000 == 0) {
             snprintf(buf, sizeof(buf), "%uK", tokens / 1000);
         } else {
-            snprintf(buf, sizeof(buf), "%.1fK", tokens / 1000.0f);
+            snprintf(buf, sizeof(buf), "%.1fK", (float)tokens / 1000.0f);
         }
-        return String(buf);
-    }
-    snprintf(buf, sizeof(buf), "%u", tokens);
-    return String(buf);
-}
-
-static size_t utf8VisualLength(const String& str) {
-    size_t len = 0;
-    const char* s = str.c_str();
-    while (*s) {
-        if ((*s & 0xC0) != 0x80) len++;
-        s++;
-    }
-    return len;
-}
-
-static void printCell(const String& text, size_t width) {
-    size_t vLen = utf8VisualLength(text);
-    if (vLen > width) {
-        size_t taken = 0;
-        const char* s = text.c_str();
-        while (*s && taken < width - 3) {
-            Serial.print(*s);
-            if ((*s & 0xC0) != 0x80) taken++;
-            s++;
-        }
-        Serial.print("...");
     } else {
-        Serial.print(text);
-        for (size_t i = 0; i < width - vLen; i++) {
-            Serial.print(' ');
-        }
+        snprintf(buf, sizeof(buf), "%u", tokens);
     }
+    return String(buf);
 }
 
 bool GeminiClient::listAvailableModels() {
     const AppConfig& cfg = _configMgr.getConfig();
 
     if (cfg.apiKey.isEmpty()) {
-        Serial.println(F("[ОШИБКА] API-ключ Gemini не настроен! Задайте его командой 'set key <api_key>'."));
+        Serial.println("Ошибка: API-ключ Gemini не настроен!");
         return false;
     }
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println(F("[ОШИБКА] Нет подключения к Wi-Fi сети!"));
+        Serial.println("Ошибка: Нет подключения к Wi-Fi сети!");
         return false;
     }
 
-    Serial.println(F("\n[AI] Запрос списка доступных моделей с Google AI Studio..."));
-    
+    String url = String(GEMINI_API_HOST) + "?key=" + cfg.apiKey;
     WiFiClientSecure client;
     client.setInsecure();
-    client.setTimeout(20);
+    client.setTimeout(30);
 
     HTTPClient http;
-    String cleanKey = cfg.apiKey; cleanKey.trim();
-    char urlBuf[256];
-    snprintf(urlBuf, sizeof(urlBuf), "https://generativelanguage.googleapis.com/v1beta/models?key=%s", cleanKey.c_str());
-    
-    if (!http.begin(client, urlBuf)) {
-        Serial.println(F("[ОШИБКА] Не удалось инициализировать HTTPS соединение."));
+    if (!http.begin(client, url)) {
+        Serial.println("Ошибка: Не удалось инициализировать HTTPS соединение.");
         return false;
     }
 
-    http.addHeader("x-goog-api-key", cleanKey);
-    http.setTimeout(20000);
-    int httpCode = http.GET();
+    http.setTimeout(30000);
+    int httpResponseCode = http.GET();
 
-    if (httpCode == 200) {
+    if (httpResponseCode == 200) {
         String payload = http.getString();
-        
-        JsonDocument filter;
-        filter["models"][0]["name"] = true;
-        filter["models"][0]["displayName"] = true;
-        filter["models"][0]["inputTokenLimit"] = true;
-        filter["models"][0]["outputTokenLimit"] = true;
-        filter["models"][0]["supportedGenerationMethods"] = true;
-        filter["error"]["message"] = true;
+        http.end();
 
         JsonDocument doc;
-        DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
-        if (err) {
-            Serial.printf("[ОШИБКА] Не удалось разобрать JSON списка моделей: %s\n", err.c_str());
-            http.end();
+        DeserializationError error = deserializeJson(doc, payload);
+
+        if (error) {
+            Serial.printf("Ошибка парсинга JSON: %s\n", error.c_str());
             return false;
         }
 
-        if (doc["error"]) {
-            Serial.printf("[ОШИБКА API] %s\n", doc["error"]["message"] | "Неизвестная ошибка");
-            http.end();
-            return false;
-        }
+        if (doc["models"].is<JsonArray>()) {
+            JsonArray modelsArray = doc["models"].as<JsonArray>();
+            _cachedModels.clear();
 
-        JsonArray models = doc["models"].as<JsonArray>();
-        if (models.isNull() || models.size() == 0) {
-            Serial.println(F("[AI] Список моделей пуст."));
-            http.end();
-            return false;
-        }
+            for (JsonObject modelObj : modelsArray) {
+                const char* name = modelObj["name"];
+                if (name != nullptr) {
+                    String fullModelName = String(name);
+                    if (fullModelName.startsWith("models/")) {
+                        fullModelName = fullModelName.substring(7);
+                    }
 
-        _cachedModels.clear();
+                    bool supportsGenerate = false;
+                    if (modelObj["supportedGenerationMethods"].is<JsonArray>()) {
+                        for (JsonVariant method : modelObj["supportedGenerationMethods"].as<JsonArray>()) {
+                            if (method.as<String>() == "generateContent") {
+                                supportsGenerate = true;
+                                break;
+                            }
+                        }
+                    }
 
-        Serial.println(F("\n=============================================== ДОСТУПНЫЕ МОДЕЛИ GEMINI ==============================================="));
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
-        Serial.println(F("|  № | ID Модели                              | Отображаемое имя                    | Расход/Лимит в сут.  | Статус    |"));
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
-
-        int count = 0;
-        for (JsonObject m : models) {
-            const char* fullName = m["name"] | "";
-            const char* dispName = m["displayName"] | "";
-            
-            bool supportsGen = false;
-            JsonArray methods = m["supportedGenerationMethods"];
-            for (const char* method : methods) {
-                if (method && strcmp(method, "generateContent") == 0) {
-                    supportsGen = true;
-                    break;
+                    if (supportsGenerate) {
+                        _cachedModels.push_back(fullModelName);
+                    }
                 }
             }
 
-            if (!supportsGen) continue;
-
-            String modelId = fullName;
-            if (modelId.startsWith("models/")) {
-                modelId = modelId.substring(7);
-            }
-
-            _cachedModels.push_back(modelId);
-            count++;
-
-            bool isActive = (modelId.equalsIgnoreCase(cfg.model));
-            const char* statusStr = isActive ? "[АКТИВНА]" : "         ";
-            
-            String limitStr;
-            if (isActive && _usageTracker) {
-                DailyUsageStats st = _usageTracker->getStats();
-                if (st.dailyRequestLimit > 0) {
-                    char lBuf[48];
-                    snprintf(lBuf, sizeof(lBuf), "%u / %u запр.", st.requestsToday, st.dailyRequestLimit);
-                    limitStr = lBuf;
-                } else {
-                    char lBuf[48];
-                    snprintf(lBuf, sizeof(lBuf), "%u запр. (безлим)", st.requestsToday);
-                    limitStr = lBuf;
-                }
-            } else {
-                uint32_t lim = getModelDailyLimit(modelId);
-                char lBuf[32];
-                snprintf(lBuf, sizeof(lBuf), "%u запр/сутки", lim);
-                limitStr = lBuf;
-            }
-
-            Serial.printf("| %2d | ", count);
-            printCell(modelId, 38);
-            Serial.print(" | ");
-            printCell(dispName, 35);
-            Serial.print(" | ");
-            printCell(limitStr, 20);
-            Serial.printf(" | %s |\n", statusStr);
+            saveCachedModels();
+            return true;
         }
-        _cachedModels.shrink_to_fit();
-        saveCachedModels();
-        Serial.println(F("+----+----------------------------------------+-------------------------------------+----------------------+-----------+"));
-        Serial.printf("Всего поддерживаемых моделей: %d\n", count);
-        Serial.printf("Текущая активная модель: %s\n", cfg.model.c_str());
-        if (_usageTracker) {
-            DailyUsageStats st = _usageTracker->getStats();
-            if (st.dailyRequestLimit > 0) {
-                int rem = (int)st.dailyRequestLimit - (int)st.requestsToday;
-                if (rem < 0) rem = 0;
-                Serial.printf("Суточный расход текущей модели: %u из %u запросов (Осталось на сегодня: %d)\n", 
-                              st.requestsToday, st.dailyRequestLimit, rem);
-            } else {
-                Serial.printf("Суточный расход текущей модели: %u запросов (Безлимитный режим)\n", st.requestsToday);
-            }
-            Serial.printf("Сброс суточных лимитов через: %s\n\n", _usageTracker->getTimeUntilMidnight().c_str());
-        }
-        Serial.println(F("[Подсказка] Чтобы переключить модель, введите 'model <№>' (напр. 'model 24') или 'set model <id>'.\n"));
-
-        http.end();
-        return true;
     } else {
-        String payload = (httpCode > 0) ? http.getString() : "";
-        Serial.printf("[ОШИБКА] Не удалось получить список моделей. HTTP Код: %d (%s)\n", 
-                      httpCode, getHttpErrorDescription(httpCode).c_str());
-        if (!payload.isEmpty()) {
-            JsonDocument errDoc;
-            if (!deserializeJson(errDoc, payload) && errDoc["error"]) {
-                Serial.printf("[ОТВЕТ GOOGLE API] %s: %s\n", 
-                              errDoc["error"]["status"] | "ERROR", 
-                              errDoc["error"]["message"] | "Неизвестная ошибка");
-            } else {
-                Serial.printf("[ОТВЕТ GOOGLE API] %s\n", payload.substring(0, 300).c_str());
-            }
-        }
+        Serial.printf("Ошибка запроса моделей (HTTP %d): %s\n", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
         http.end();
         return false;
     }
+
+    return false;
 }
 
 bool GeminiClient::testConnection() {
-    Serial.println(F("[Тест] Проверка связи с Google Generative Language API..."));
-    GeminiResponse res = ask("Ответь одним словом: 'РАБОТАЕТ'");
-    if (res.success) {
-        Serial.printf("[Тест] Успешно! Ответ модели: %s (Время: %lu мс)\n", res.text.c_str(), res.durationMs);
-        return true;
-    } else {
-        Serial.printf("[Тест] Ошибка: %s\n", res.text.c_str());
+    IPAddress resolvedIP;
+    if (!WiFi.hostByName("generativelanguage.googleapis.com", resolvedIP)) {
         return false;
     }
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(10);
+
+    if (!client.connect("generativelanguage.googleapis.com", 443)) {
+        return false;
+    }
+
+    client.stop();
+    return true;
 }

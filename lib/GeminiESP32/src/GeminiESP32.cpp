@@ -37,7 +37,7 @@ static void geminiAsyncWorker(void* pvParameters) {
 
 GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
     : _hardwareEnabled(true), _smartDnsEnabled(true), _isBusy(false) {
-    _client = new GeminiClient(_config, &_usage, &_hardware);
+    _client = new GeminiClient(_config, &_usage, &_hardware, &_functions);
     
     if (apiKey.length() > 0) {
         _config.setApiKey(apiKey);
@@ -48,6 +48,7 @@ GeminiESP32::GeminiESP32(const String& apiKey, const String& model)
 }
 
 GeminiESP32::~GeminiESP32() {
+    stopWebDashboard();
     if (_client) {
         delete _client;
         _client = nullptr;
@@ -112,7 +113,7 @@ void GeminiESP32::enableHardwareControl(bool enable) {
     _hardware.setEnabled(enable);
     if (_client) {
         delete _client;
-        _client = new GeminiClient(_config, &_usage, enable ? &_hardware : nullptr);
+        _client = new GeminiClient(_config, &_usage, enable ? &_hardware : nullptr, &_functions);
     }
 }
 
@@ -148,6 +149,28 @@ GeminiResponse GeminiESP32::query(const String& prompt) {
     return _client->ask(prompt);
 }
 
+String GeminiESP32::askWithImage(const String& prompt, 
+                                 const uint8_t* imageData, 
+                                 size_t imageSize, 
+                                 const String& mimeType) {
+    if (!_client) return "Клиент Gemini не инициализирован";
+    GeminiResponse resp = _client->askWithImage(prompt, imageData, imageSize, mimeType);
+    return resp.text;
+}
+
+GeminiResponse GeminiESP32::queryWithImage(const String& prompt, 
+                                           const uint8_t* imageData, 
+                                           size_t imageSize, 
+                                           const String& mimeType) {
+    if (!_client) {
+        GeminiResponse err;
+        err.success = false;
+        err.text = "Клиент Gemini не инициализирован";
+        return err;
+    }
+    return _client->askWithImage(prompt, imageData, imageSize, mimeType);
+}
+
 GeminiResponse GeminiESP32::streamAsk(const String& prompt, GeminiStreamCallback onChunk) {
     if (!_client) {
         GeminiResponse err;
@@ -179,7 +202,7 @@ bool GeminiESP32::askAsync(const String& prompt, GeminiTextCallback onResponse) 
         ctx,
         1,
         NULL,
-        0 // Фоновое ядро 0
+        0
     );
 
     if (res != pdPASS) {
@@ -252,6 +275,27 @@ bool GeminiESP32::streamAskAsync(const String& prompt, GeminiStreamCallback onCh
         return false;
     }
     return true;
+}
+
+void GeminiESP32::registerFunction(const String& name, 
+                                  const String& description, 
+                                  const std::vector<FunctionParam>& params, 
+                                  FunctionHandler handler) {
+    _functions.registerFunction(name, description, params, handler);
+}
+
+void GeminiESP32::registerFunction(const String& name, 
+                                  const String& description, 
+                                  FunctionHandler handler) {
+    _functions.registerFunction(name, description, handler);
+}
+
+bool GeminiESP32::startWebDashboard(uint16_t port, bool inBackground) {
+    return _dashboard.begin(this, port, inBackground);
+}
+
+void GeminiESP32::stopWebDashboard() {
+    _dashboard.stop();
 }
 
 bool GeminiESP32::ping() {

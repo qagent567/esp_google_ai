@@ -13,6 +13,8 @@
 #include "ConfigManager.h"
 #include "HardwareController.h"
 #include "UsageTracker.h"
+#include "FunctionRegistry.h"
+#include "WebDashboard.h"
 #include "GeminiClient.h"
 
 /**
@@ -123,6 +125,26 @@ public:
     GeminiResponse query(const String& prompt);
 
     /**
+     * @brief Мультимодальный запрос с фото (Gemini Vision / ESP32-CAM)
+     * @param prompt Вопрос по картинке (например, "Что изображено на фото?")
+     * @param imageData Указатель на буфер с изображением (JPEG/PNG)
+     * @param imageSize Размер изображения в байтах
+     * @param mimeType MIME-тип изображения (по умолчанию "image/jpeg")
+     */
+    String askWithImage(const String& prompt, 
+                        const uint8_t* imageData, 
+                        size_t imageSize, 
+                        const String& mimeType = "image/jpeg");
+
+    /**
+     * @brief Полный мультимодальный запрос с фото
+     */
+    GeminiResponse queryWithImage(const String& prompt, 
+                                  const uint8_t* imageData, 
+                                  size_t imageSize, 
+                                  const String& mimeType = "image/jpeg");
+
+    /**
      * @brief Потоковый запрос (Server-Sent Events / Streaming)
      * Вызывает callback по мере поступления новых фрагментов текста от Google.
      * @param prompt Вопрос для ИИ
@@ -138,10 +160,6 @@ public:
 
     /**
      * @brief Неблокирующий асинхронный запрос (текстовый колбэк)
-     * Запрос выполняется в отдельном потоке FreeRTOS, не мешая работе loop().
-     * @param prompt Вопрос для ИИ
-     * @param onResponse Колбэк, вызываемый при получении ответа
-     * @return true если фоновая задача успешно запущена, false если система занята
      */
     bool askAsync(const String& prompt, GeminiTextCallback onResponse);
 
@@ -155,6 +173,39 @@ public:
      */
     bool streamAskAsync(const String& prompt, GeminiStreamCallback onChunk, GeminiResponseCallback onComplete = nullptr);
 
+    // --- Нативный Function Calling (Tool Use) ---
+    /**
+     * @brief Регистрация C++ функции для вызова моделью Gemini
+     * @param name Имя функции (напр. "set_relay")
+     * @param description Описание для нейросети
+     * @param params Параметры функции
+     * @param handler C++ лямбда/функция
+     */
+    void registerFunction(const String& name, 
+                          const String& description, 
+                          const std::vector<FunctionParam>& params, 
+                          FunctionHandler handler);
+
+    /**
+     * @brief Регистрация простой C++ функции без параметров
+     */
+    void registerFunction(const String& name, 
+                          const String& description, 
+                          FunctionHandler handler);
+
+    // --- Встроенный Web Dashboard ---
+    /**
+     * @brief Запуск встроенного веб-сервера со стильным интерфейсом чата и телеметрии
+     * @param port Порт веб-сервера (по умолчанию 80)
+     * @param inBackground Запуск в фоновом FreeRTOS потоке (не требует вызовов в loop)
+     */
+    bool startWebDashboard(uint16_t port = 80, bool inBackground = true);
+
+    /**
+     * @brief Остановка веб-сервера
+     */
+    void stopWebDashboard();
+
     /**
      * @brief Проверка доступности Google AI Studio API (Ping)
      */
@@ -164,12 +215,16 @@ public:
     HardwareController& getHardware() { return _hardware; }
     UsageTracker& getUsage() { return _usage; }
     ConfigManager& getConfig() { return _config; }
+    FunctionRegistry& getFunctions() { return _functions; }
+    WebDashboard& getDashboard() { return _dashboard; }
     GeminiClient& getClient() { return *_client; }
 
 private:
     ConfigManager _config;
     HardwareController _hardware;
     UsageTracker _usage;
+    FunctionRegistry _functions;
+    WebDashboard _dashboard;
     GeminiClient* _client;
     bool _hardwareEnabled;
     bool _smartDnsEnabled;

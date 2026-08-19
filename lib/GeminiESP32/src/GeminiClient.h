@@ -7,6 +7,7 @@
 #include <vector>
 #include <functional>
 #include "ConfigManager.h"
+#include "FunctionRegistry.h"
 
 #ifndef GEMINI_HISTORY_LIMIT
 #define GEMINI_HISTORY_LIMIT 10
@@ -23,6 +24,9 @@ struct GeminiResponse {
     int candidateTokens;      // Токенов в ответе нейросети
     int totalTokens;          // Суммарно использовано токенов
     unsigned long durationMs; // Время выполнения запроса в миллисекундах
+    bool hasFunctionCall;     // Была ли вызвана C++ функция (Tool Call)
+    String functionName;      // Имя вызванной функции
+    String functionResult;    // Результат выполнения функции на ESP32
 };
 
 /**
@@ -46,11 +50,15 @@ class HardwareController;
  */
 class GeminiClient {
 public:
-    GeminiClient(ConfigManager& configMgr, UsageTracker* usageTracker = nullptr, HardwareController* hwController = nullptr);
+    GeminiClient(ConfigManager& configMgr, 
+                 UsageTracker* usageTracker = nullptr, 
+                 HardwareController* hwController = nullptr,
+                 FunctionRegistry* funcRegistry = nullptr);
 
     // Установка указателей на внешние модули
     void setUsageTracker(UsageTracker* tracker) { _usageTracker = tracker; }
     void setHardwareController(HardwareController* hw) { _hwController = hw; }
+    void setFunctionRegistry(FunctionRegistry* registry) { _funcRegistry = registry; }
 
     // Определение суточного лимита модели (RPD)
     static uint32_t getModelDailyLimit(const String& modelId);
@@ -67,8 +75,14 @@ public:
     void saveHistoryToNvs();
 
     // --- Синхронные запросы ---
-    // Отправка текстового запроса (промпта) к Gemini
+    // Текстовый запрос к Gemini
     GeminiResponse ask(const String& prompt);
+
+    // Мультимодальный запрос с изображением (Gemini Vision)
+    GeminiResponse askWithImage(const String& prompt, 
+                                const uint8_t* imageData, 
+                                size_t imageSize, 
+                                const String& mimeType = "image/jpeg");
 
     // Потоковый запрос (Server-Sent Events / SSE Streaming)
     GeminiResponse streamAsk(const String& prompt, GeminiStreamCallback onChunk);
@@ -86,17 +100,24 @@ public:
     // Получить описание ошибки по HTTP коду
     static String getHttpErrorDescription(int httpCode);
 
+    // Кодирование бинарных данных в Base64 (для отправки фото)
+    static String encodeBase64(const uint8_t* data, size_t length);
+
     // Формирование URL эндпоинта
     String buildApiUrl() const;
     String buildStreamApiUrl() const;
 
     // Формирование JSON полезной нагрузки
     String buildRequestBody(const String& prompt) const;
+    String buildRequestBodyWithImage(const String& prompt, 
+                                     const uint8_t* imageData, 
+                                     size_t imageSize, 
+                                     const String& mimeType) const;
 
-    // Парсинг JSON ответа от Google API с оптимизацией памяти
+    // Парсинг JSON ответа от Google API
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
 
-    // Проверка и выполнение аппаратных действий (actions) в ответе модели
+    // Обработка Function Calling и аппаратных действий
     void processHardwareActions(GeminiResponse& response);
 
     // Доступ к кэшированному списку моделей
@@ -113,6 +134,7 @@ private:
     ConfigManager& _configMgr;
     UsageTracker* _usageTracker;
     HardwareController* _hwController;
+    FunctionRegistry* _funcRegistry;
     std::vector<String> _cachedModels;
     std::vector<ChatMessage> _history;
     bool _persistentHistory;

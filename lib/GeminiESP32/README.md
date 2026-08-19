@@ -242,6 +242,18 @@ if (ai.isBusy()) {
     // ИИ сейчас генерирует ответ в фоне
 }
 
+// 👁️ Отправка фото в Gemini Vision (ESP32-CAM / OV2640)
+String analysis = ai.askWithImage("Что на этом фото?", fb->buf, fb->len, "image/jpeg");
+
+// ⚙️ Нативный Function Calling (Tool Use)
+ai.registerFunction("turn_heater_on", "Включает обогреватель", [](JsonObjectConst args) -> String {
+    digitalWrite(4, HIGH);
+    return "Обогреватель включен";
+});
+
+// 🌐 Запуск встроенного Web Dashboard прямо со смартфона
+ai.startWebDashboard(80, true); // true = работа в фоне FreeRTOS на Core 0
+
 // Сохранение контекста во Flash NVS (помнит диалог после рестарта)
 ai.enablePersistentHistory(true);
 
@@ -581,6 +593,9 @@ build_flags =
 | [Integration](examples/Integration/Integration.ino) | Встраивание ИИ в готовую прошивку без конфликтов |
 | [AsyncChat](examples/AsyncChat/AsyncChat.ino) | Неблокирующие асинхронные запросы в фоне FreeRTOS |
 | [StreamingChat](examples/StreamingChat/StreamingChat.ino) | Мгновенный потоковый вывод (Server-Sent Events) |
+| [FunctionCalling](examples/FunctionCalling/FunctionCalling.ino) | Официальный Google Tool Use / C++ Function Calling |
+| [WebDashboard](examples/WebDashboard/WebDashboard.ino) | Встроенный веб-интерфейс чата и телеметрии в браузере |
+| [Vision_ESP32_CAM](examples/Vision_ESP32_CAM/Vision_ESP32_CAM.ino) | Анализ снимков с камеры через Gemini Vision |
 
 ---
 
