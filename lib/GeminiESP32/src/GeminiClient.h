@@ -34,6 +34,7 @@ struct GeminiResponse {
     int candidateTokens;      ///< Количество токенов в сгенерированном ответе модели
     int totalTokens;          ///< Суммарное количество использованных токенов
     unsigned long durationMs; ///< Длительность сетевого запроса в миллисекундах
+    int agentStepsExecuted;   ///< Количество выполненных автономных агентных шагов
 
 #if GEMINI_ENABLE_FUNCTION_CALLING
     bool hasFunctionCall;     ///< Флаг: был ли получен запрос на вызов C++ функции (Tool Call)
@@ -140,6 +141,13 @@ public:
      */
     GeminiResponse ask(const String& prompt);
 
+    /**
+     * @brief Автономный многошаговый агентный запрос (ReAct: Thought -> Action -> Observation -> Final Answer)
+     * @param goalPrompt Задача или цель для ИИ-агента
+     * @param maxSteps Максимальное количество итераций обратной связи (по умолчанию 3)
+     */
+    GeminiResponse askAgent(const String& goalPrompt, int maxSteps = 3);
+
 #if GEMINI_ENABLE_VISION
     /**
      * @brief Отправка мультимодального запроса с изображением (Gemini Vision)
@@ -228,6 +236,11 @@ public:
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
 
     /**
+     * @brief Извлечение и исполнение аппаратного действия из ответа ИИ
+     */
+    bool extractAndExecuteAction(const String& responseText, String& actionResult);
+
+    /**
      * @brief Проверка и выполнение аппаратных действий в ответе модели
      */
     void processHardwareActions(GeminiResponse& response);
@@ -243,6 +256,9 @@ public:
     const std::vector<String>& getCachedModels() const { return _cachedModels; }
 
 private:
+    // Низкоуровневый HTTP POST запрос к Gemini
+    GeminiResponse sendRawRequest(const String& requestBody);
+
     ConfigManager& _configMgr;
     UsageTracker* _usageTracker;
     HardwareController* _hwController;

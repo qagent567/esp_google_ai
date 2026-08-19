@@ -6,64 +6,84 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <time.h>
 
 /**
- * @brief Структура статистики суточного использования Gemini API
+ * @brief Структура данных для суточной статистики и лимитов использования AI
  */
 struct DailyUsageStats {
-    uint32_t requestsToday;      ///< Количество отправленных запросов за текущие сутки
-    uint32_t promptTokensToday;  ///< Сумма входных токенов за сегодня
-    uint32_t responseTokensToday;///< Сумма токенов ответа за сегодня
-    uint32_t totalTokensToday;   ///< Суммарно потрачено токенов сегодня
-    uint32_t dailyRequestLimit;  ///< Суточный лимит запросов (RPD)
-    uint32_t requestsThisMinute; ///< Количество запросов за текущую минуту (RPM)
-    uint32_t minuteLimit;        ///< Лимит запросов в минуту (RPM, обычно 15)
-    int currentDayOfYear;        ///< День года (1-366) для авто-сброса в полночь
+    uint32_t dailyRequestLimit;    ///< Суточный лимит запросов (по умолчанию 500, 0 = без ограничений)
+    uint32_t requestsToday;        ///< Количество запросов, выполненных сегодня
+    uint32_t promptTokensToday;    ///< Израсходовано токенов промптов сегодня
+    uint32_t responseTokensToday;  ///< Израсходовано токенов ответов сегодня
+    uint32_t totalTokensToday;     ///< Суммарно токенов сегодня
+    
+    uint32_t lifetimeRequests;     ///< Общее количество запросов за все время
+    uint64_t lifetimeTokens;       ///< Общее количество токенов за все время
+    
+    int lastDay;                   ///< День года (0-365) для определения наступления полуночи
+    uint32_t lastResetMillis;      ///< Временная метка millis() для резервного таймера суток
 };
 
 /**
- * @brief Класс трекера использования квот и расхода токенов Google AI Studio
+ * @brief Класс учета суточных лимитов и расхода запросов/токенов
  */
 class UsageTracker {
 public:
     UsageTracker();
     ~UsageTracker();
 
+    // Инициализация NVS хранилища и загрузка сохраненной статистики
     bool begin();
 
-    // Фиксация совершенного запроса
+    // Синхронизация реального времени по протоколу NTP (UTC+3 по умолчанию для Москвы/РФ)
+    void syncNTP(int gmtOffsetHours = 3);
+
+    // Проверка наступления новых суток (00:00) и автоматический сброс счетчиков
+    void checkDayRollover();
+
+    // Проверка, исчерпан ли суточный лимит запросов
+    bool isLimitReached();
+    bool canSendRequest() { return !isLimitReached(); }
+
+    // Регистрация выполненного запроса и сохранение в NVS
     void recordRequest(int promptTokens, int responseTokens, int totalTokens);
 
-    // Проверка, не исчерпан ли суточный или минутный лимит
-    bool canSendRequest() const;
+    // Получение текущей статистики
+    DailyUsageStats getStats();
 
-    // Установка суточного лимита
+    // Установка суточного лимита запросов (0 = безлимитно)
     void setDailyLimit(uint32_t limit);
 
-    // Установка минутного лимита (RPM)
-    void setMinuteLimit(uint32_t limit);
+    // Установка часового пояса
+    void setTimezone(int offsetHours) { syncNTP(offsetHours); }
 
-    // Установка часового пояса (для правильного определения полуночи)
-    void setTimezone(int offsetHours);
+    // Ручной сброс суточных счетчиков
+    void resetDailyUsage();
+    void resetStats() { resetDailyUsage(); }
 
-    // Получение текущей статистики
-    DailyUsageStats getStats() const;
+    // Полный сброс всей накопленной статистики
+    void resetAllUsage();
 
-    // Сброс статистики
-    void resetStats();
+    // Получение строки текущего времени (ЧЧ:ММ:СС ДД.ММ.ГГГГ)
+    String getCurrentTimeString() const;
+
+    // Расчет времени до полуночи (до сброса суточного лимита)
+    String getTimeUntilMidnight() const;
+
+    // Вывод красивого отчета по суточным лимитам и квотам
+    void printQuotaReport();
 
     // Форматированная строка статистики
-    String getUsageSummary() const;
+    String getUsageSummary();
 
 private:
-    void loadFromNvs();
-    void saveToNvs();
-    void checkDayRollover();
-    int getDayOfYear() const;
-
+    Preferences _prefs;
     DailyUsageStats _stats;
-    int _timezoneOffset;
-    unsigned long _minuteWindowStart;
+    bool _ntpSynced;
+
+    void load();
+    void save();
 };
 
 #endif // GEMINI_ENABLE_USAGE_TRACKER

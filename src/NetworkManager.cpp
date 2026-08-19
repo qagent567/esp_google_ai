@@ -66,8 +66,10 @@ bool NetworkManager::connect() {
     strncpy((char*)wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
     if (!pass.isEmpty()) {
         strncpy((char*)wifi_config.sta.password, pass.c_str(), sizeof(wifi_config.sta.password) - 1);
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA_PSK;
+    } else {
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
     }
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
     // Поддержка PMF (Protected Management Frames) для совместимости с Windows Hotspot и современными роутерами
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;

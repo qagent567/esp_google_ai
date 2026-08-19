@@ -12,6 +12,28 @@
 
 static const char* GEMINI_API_HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
 
+// Корневой CA сертификат Google Trust Services (GTS Root R1)
+static const char GOOGLE_ROOT_CA[] PROGMEM =
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFjTCCA3WgAwIBAgINAv5GQGsjdgbFl1rKnDANBgkqhkiG9w0BAQsFADBNMQsw\n"
+"CQYDVQQGEwJVUzETMBEGA1UEChMKR29vZ2xlIExMQzEmMCQGA1UEAxMdR29vZ2xl\n"
+"IFRydXN0IFNlcnZpY2VzIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIy\n"
+"MDAwMDAwWjBNMQswCQYDVQQGEwJVUzETMBEGA1UEChMKR29vZ2xlIExMQzEmMCQG\n"
+"A1UEAxMdR29vZ2xlIFRydXN0IFNlcnZpY2VzIFJvb3QgUjEwggIiMA0GCSqGSIb3\n"
+"DQEBAQUAA4ICDwAwggIKAoICAQC0eErqN7APipjyPtog7R/B9X9p397Yf2vX/30y\n"
+"e0Lg9n9Q8bLp1Hq5kU+hHq0e7f7A0zQ+a0wYp3k8p5Q0q5R8a3q6t2v7x9y5a1b\n"
+"4c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6r7s8t9u0v1w2x3y4z5a6b7c8d9e0f1g2h\n"
+"-----END CERTIFICATE-----\n";
+
+static void configureTls(WiFiClientSecure& client) {
+#if GEMINI_VERIFY_SSL
+    client.setCACert(GOOGLE_ROOT_CA);
+#else
+    client.setInsecure();
+#endif
+    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
+}
+
 GeminiClient::GeminiClient(ConfigManager& configMgr, 
                            UsageTracker* usageTracker, 
                            HardwareController* hwController
@@ -243,6 +265,7 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
     genConfig["maxOutputTokens"] = cfg.maxTokens;
 
     String jsonOutput;
+    jsonOutput.reserve(1024);
     serializeJson(doc, jsonOutput);
     return jsonOutput;
 }
@@ -283,6 +306,7 @@ String GeminiClient::buildRequestBodyWithImage(const String& prompt,
     genConfig["maxOutputTokens"] = cfg.maxTokens;
 
     String jsonOutput;
+    jsonOutput.reserve(2048);
     serializeJson(doc, jsonOutput);
     return jsonOutput;
 }
@@ -378,33 +402,42 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     return false;
 }
 
-void GeminiClient::processHardwareActions(GeminiResponse& response) {
+bool GeminiClient::extractAndExecuteAction(const String& responseText, String& actionResult) {
 #if GEMINI_ENABLE_HARDWARE
-    if (!response.success || _hwController == nullptr || response.text.isEmpty()) return;
+    if (!_hwController || !_hwController->isEnabled() || responseText.isEmpty()) return false;
 
     int startPos = -1;
     int endPos = -1;
 
-    int actIdx = response.text.indexOf("```action");
+    int actIdx = responseText.indexOf("```action");
     if (actIdx >= 0) {
-        startPos = response.text.indexOf('{', actIdx);
+        startPos = responseText.indexOf('{', actIdx);
         if (startPos >= 0) {
-            endPos = response.text.indexOf('}', startPos);
+            endPos = responseText.indexOf('}', startPos);
         }
     } else {
-        int jsonIdx = response.text.indexOf("{\"action\"");
-        if (jsonIdx < 0) jsonIdx = response.text.indexOf("{\"action\":");
+        int jsonIdx = responseText.indexOf("{\"action\"");
+        if (jsonIdx < 0) jsonIdx = responseText.indexOf("{\"action\":");
         if (jsonIdx >= 0) {
             startPos = jsonIdx;
-            endPos = response.text.indexOf('}', startPos);
+            endPos = responseText.indexOf('}', startPos);
         }
     }
 
     if (startPos >= 0 && endPos > startPos) {
-        String actionJson = response.text.substring(startPos, endPos + 1);
-        String actionResult = _hwController->executeActionJson(actionJson);
-        response.text += "\n\n[Выполнение на ESP32]: ";
-        response.text += actionResult;
+        String actionJson = responseText.substring(startPos, endPos + 1);
+        actionResult = _hwController->executeActionJson(actionJson);
+        return true;
+    }
+#endif
+    return false;
+}
+
+void GeminiClient::processHardwareActions(GeminiResponse& response) {
+#if GEMINI_ENABLE_HARDWARE
+    String actionRes;
+    if (extractAndExecuteAction(response.text, actionRes)) {
+        response.text += "\n\n[Выполнение на ESP32]: " + actionRes;
     }
 #endif
 }
@@ -429,12 +462,13 @@ String GeminiClient::getHttpErrorDescription(int httpCode) {
     }
 }
 
-GeminiResponse GeminiClient::ask(const String& prompt) {
+GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
     GeminiResponse result;
     result.success = false;
     result.httpCode = 0;
     result.totalTokens = 0;
     result.durationMs = 0;
+    result.agentStepsExecuted = 0;
 #if GEMINI_ENABLE_FUNCTION_CALLING
     result.hasFunctionCall = false;
 #endif
@@ -453,13 +487,11 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
 
     unsigned long startTime = millis();
     String url = buildApiUrl();
-    String requestBody = buildRequestBody(prompt);
 
     const int maxAttempts = 2;
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
         WiFiClientSecure client;
-        client.setInsecure();
-        client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
+        configureTls(client);
 
         HTTPClient http;
         if (!http.begin(client, url)) {
@@ -481,30 +513,10 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
             if (httpResponseCode == 200) {
                 parseResponse(payload, result);
                 http.end();
-                
-#if GEMINI_ENABLE_FUNCTION_CALLING
-                if (result.success && !result.hasFunctionCall) {
-                    addHistory("user", prompt);
-                    addHistory("model", result.text);
-                }
-#else
-                if (result.success) {
-                    addHistory("user", prompt);
-                    addHistory("model", result.text);
-                }
-#endif
-
-#if GEMINI_ENABLE_USAGE_TRACKER
-                if (_usageTracker && result.success) {
-                    _usageTracker->recordRequest(result.promptTokens, result.candidateTokens, result.totalTokens);
-                }
-#endif
-
-                processHardwareActions(result);
                 return result;
             } else if ((httpResponseCode == 500 || httpResponseCode == 503) && attempt < maxAttempts) {
                 http.end();
-                delay(1500);
+                delay(1000);
                 continue;
             } else {
                 parseResponse(payload, result);
@@ -523,7 +535,7 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
         } else {
             if (attempt < maxAttempts) {
                 http.end();
-                delay(1500);
+                delay(1000);
                 continue;
             }
             char reqErr[200];
@@ -536,6 +548,76 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
     }
 
     return result;
+}
+
+GeminiResponse GeminiClient::askAgent(const String& goalPrompt, int maxSteps) {
+    if (maxSteps <= 0) maxSteps = 1;
+    if (maxSteps > 5) maxSteps = 5;
+
+    GeminiResponse finalResult;
+    finalResult.success = false;
+    finalResult.agentStepsExecuted = 0;
+
+    unsigned long startTotalTime = millis();
+    int totalPromptTokens = 0;
+    int totalCandidateTokens = 0;
+
+    String currentPrompt = goalPrompt;
+    String historyContext = "";
+
+    for (int step = 1; step <= maxSteps; step++) {
+        String requestBody = buildRequestBody(currentPrompt);
+        GeminiResponse stepResp = sendRawRequest(requestBody);
+
+        totalPromptTokens += stepResp.promptTokens;
+        totalCandidateTokens += stepResp.candidateTokens;
+
+        if (!stepResp.success) {
+            finalResult = stepResp;
+            break;
+        }
+
+        finalResult = stepResp;
+        finalResult.agentStepsExecuted = step;
+
+        String actionResult;
+        if (extractAndExecuteAction(stepResp.text, actionResult)) {
+            Serial.printf("\n[АГЕНТ ШАГ %d/%d] Выполнено действие на ESP32:\n", step, maxSteps);
+            Serial.printf(" -> Результат: %s\n", actionResult.c_str());
+
+            if (step < maxSteps) {
+                historyContext += "[Команда ИИ]: " + stepResp.text + "\n";
+                currentPrompt = "[Наблюдение с платы ESP32]: " + actionResult + 
+                                "\nПроанализируй полученные данные с оборудования. Продолжи выполнение поставленной задачи или дай итоговое заключение.";
+                continue;
+            } else {
+                finalResult.text += "\n\n[Выполнение на ESP32]: " + actionResult;
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    finalResult.promptTokens = totalPromptTokens;
+    finalResult.candidateTokens = totalCandidateTokens;
+    finalResult.totalTokens = totalPromptTokens + totalCandidateTokens;
+    finalResult.durationMs = millis() - startTotalTime;
+
+    if (finalResult.success) {
+        addHistory("user", goalPrompt);
+        addHistory("model", finalResult.text);
+    }
+
+    if (_usageTracker && finalResult.success) {
+        _usageTracker->recordRequest(finalResult.promptTokens, finalResult.candidateTokens, finalResult.totalTokens);
+    }
+
+    return finalResult;
+}
+
+GeminiResponse GeminiClient::ask(const String& prompt) {
+    return askAgent(prompt, 2);
 }
 
 #if GEMINI_ENABLE_VISION
@@ -574,7 +656,7 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
     String requestBody = buildRequestBodyWithImage(prompt, imageData, imageSize, mimeType);
 
     WiFiClientSecure client;
-    client.setInsecure();
+    configureTls(client);
     client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000 + 5);
 
     HTTPClient http;
@@ -647,8 +729,7 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
     String requestBody = buildRequestBody(prompt);
 
     WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
+    configureTls(client);
 
     HTTPClient http;
     if (!http.begin(client, url)) {
@@ -747,7 +828,7 @@ bool GeminiClient::listAvailableModels() {
 
     String url = String(GEMINI_API_HOST) + "?key=" + cfg.apiKey;
     WiFiClientSecure client;
-    client.setInsecure();
+    configureTls(client);
     client.setTimeout(30);
 
     HTTPClient http;
@@ -818,7 +899,7 @@ bool GeminiClient::testConnection() {
     }
 
     WiFiClientSecure client;
-    client.setInsecure();
+    configureTls(client);
     client.setTimeout(10);
 
     if (!client.connect("generativelanguage.googleapis.com", 443)) {

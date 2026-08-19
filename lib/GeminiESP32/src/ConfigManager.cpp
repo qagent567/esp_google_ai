@@ -5,8 +5,10 @@ static const char* DEFAULT_MODEL = "gemini-3.5-flash-lite";
 static const char* DEFAULT_DNS_PRIMARY = "111.88.96.50";   // xbox-dns.ru Primary IPv4
 static const char* DEFAULT_DNS_SECONDARY = "111.88.96.51"; // xbox-dns.ru Secondary IPv4
 static const char* DEFAULT_SYSTEM_PROMPT = 
-    "Ты — встроенный AI-ассистент микроконтроллера ESP32 с доступом к аппаратному управлению. "
-    "Отвечай кратко, технически точно и по делу.";
+    "Ты — бортовой ИИ-ассистент микроконтроллера ESP32. "
+    "Отвечай кратко, дружелюбно, технически грамотно и по делу. "
+    "Выполняй аппаратные команды только тогда, когда пользователь явно просит управлять платой или датчиками. "
+    "На обычные приветствия и текстовые вопросы отвечай обычным текстом без блоков action.";
 static const int DEFAULT_MAX_TOKENS = 1024;
 static const float DEFAULT_TEMPERATURE = 0.7f;
 static const int DEFAULT_TIMEZONE = 3; // По умолчанию UTC+3 (Москва)

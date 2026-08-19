@@ -105,6 +105,15 @@
 #endif
 
 /**
+ * @brief Проверка SSL/TLS сертификата серверов Google
+ * 1 = Строгая проверка CA-сертификата (Google Trust Services / GlobalSign)
+ * 0 = Insecure (быстрое подключение без верификации цепочки сертификатов)
+ */
+#ifndef GEMINI_VERIFY_SSL
+#define GEMINI_VERIFY_SSL 0
+#endif
+
+/**
  * @brief Таймаут HTTPS запроса к Google API в миллисекундах
  */
 #ifndef GEMINI_HTTP_TIMEOUT_MS
