@@ -266,7 +266,7 @@ void WebDashboard::handleStatus() {
     doc["dailyLimit"] = _ai->getUsage().getStats().dailyRequestLimit;
 #else
     doc["requestsToday"] = 0;
-    doc["dailyLimit"] = 1500;
+    doc["dailyLimit"] = 500;
 #endif
     doc["model"] = _ai->getConfig().getConfig().model;
 

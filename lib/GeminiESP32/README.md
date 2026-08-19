@@ -35,7 +35,7 @@
 | 🤖 **Physical AI** | ИИ управляет GPIO, читает ADC, сканирует I2C |
 | 🛡️ **Изоляция пинов** | Белый список защищает вашу периферию |
 | 🌐 **Smart DNS** | Прямой доступ к Google API без VPN |
-| 📊 **Учет квот** | Автоматический трекер 1500 RPD лимита |
+| 📊 **Учет квот** | Автоматический трекер 500 RPD лимита |
 | 💾 **RAM-оптимизация** | Фильтрованный JSON парсинг, нет утечек кучи |
 | 🔁 **Авто-повтор** | Retry при сбоях сети (500, 503, timeout) |
 | 💡 **NVS кэш** | Сохранение настроек в Flash без перепрошивки |
@@ -320,7 +320,7 @@ struct DeviceTelemetry {
 
 ```cpp
 struct DailyUsageStats {
-    uint32_t dailyRequestLimit;   // Лимит запросов в сутки (1500 Free Tier)
+    uint32_t dailyRequestLimit;   // Лимит запросов в сутки (500 Free Tier)
     uint32_t requestsToday;       // Запросов сделано сегодня
     uint32_t promptTokensToday;   // Входных токенов сегодня
     uint32_t responseTokensToday; // Выходных токенов сегодня
@@ -570,6 +570,41 @@ build_flags =
     -Wl,--gc-sections
     -D CORE_DEBUG_LEVEL=0
 ```
+
+---
+
+## 🔌 Совместимость плат
+
+| Чип / Плата | Статус | Примечания |
+|---|:---:|---|
+| **ESP32 (WROOM / WROVER / DevKit)** | ✅ Полная | Все модули: Chating, Web UI, Tools, FreeRTOS |
+| **ESP32-S3 (Dual-Core LX7)** | ✅ Полная | Высокая производительность HTTPS/TLS |
+| **AI Thinker ESP32-CAM (OV2640)** | ✅ Полная | Поддержка Gemini Vision (мультимодальность) |
+| **ESP32-C3 / ESP32-C6 (RISC-V)** | ✅ Базовая | Текстовые запросы и стриминг |
+| **ESP8266** | ❌ Не поддерживается | Недостаточно оперативной памяти для mbedTLS и JSON |
+
+---
+
+## 🛠️ Решение проблем (Troubleshooting)
+
+### 1. Ошибка `HTTP 403 Forbidden`
+* **Причина:** Блокировка региона Google AI Studio.
+* **Решение:** Убедитесь, что Smart DNS включен: `ai.enableSmartDns(true)` (включен по умолчанию). Если DNS заблокирован провайдером, настройте альтернативные адреса через `ai.setSmartDns(...)`.
+
+### 2. Ошибка `HTTP 400 Bad Request`
+* **Причина:** Некорректный или пустой API-ключ Gemini, либо неверное имя модели.
+* **Решение:** Проверьте ключ на [aistudio.google.com](https://aistudio.google.com/) и задайте его через `ai.setApiKey("...")`.
+
+### 3. Медленный ответ (больше 3-5 секунд)
+* **Решение:** Используйте модель по умолчанию `gemini-3.5-flash-lite` — она оптимизирована для микроконтроллеров и отвечает за 0.8–1.5 секунды. Для мгновенного вывода используйте метод `streamAsk()`.
+
+### 4. Нехватка памяти (Out of Memory / Guru Meditation Error)
+* **Решение:** Отключите неиспользуемые подсистемы в `platformio.ini`:
+  ```ini
+  build_flags =
+      -D GEMINI_ENABLE_WEB_DASHBOARD=0
+      -D GEMINI_ENABLE_VISION=0
+  ```
 
 ---
 
