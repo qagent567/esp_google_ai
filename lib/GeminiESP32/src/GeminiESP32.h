@@ -57,6 +57,14 @@ public:
     void setTemperature(float temp);
 
     /**
+     * @brief Настройка часового пояса
+     */
+    void setTimezone(int tzOffsetHours);
+
+    // --- Управление историей диалога ---
+    void clearHistory();
+
+    /**
      * @brief Настройка максимального количества токенов
      */
     void setMaxTokens(int maxTokens);

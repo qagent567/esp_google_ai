@@ -7,6 +7,10 @@
 #include <vector>
 #include "ConfigManager.h"
 
+#ifndef GEMINI_HISTORY_LIMIT
+#define GEMINI_HISTORY_LIMIT 10
+#endif
+
 /**
  * @brief Результат выполнения запроса к Gemini API
  */
@@ -18,6 +22,14 @@ struct GeminiResponse {
     int candidateTokens;      // Токенов в ответе нейросети
     int totalTokens;          // Суммарно использовано токенов
     unsigned long durationMs; // Время выполнения запроса в миллисекундах
+};
+
+/**
+ * @brief Сообщение в истории чата
+ */
+struct ChatMessage {
+    String role;
+    String text;
 };
 
 class UsageTracker;
@@ -36,6 +48,11 @@ public:
 
     // Определение суточного лимита модели (RPD)
     static uint32_t getModelDailyLimit(const String& modelId);
+
+    // Управление историей диалога
+    void clearHistory() { _history.clear(); }
+    const std::vector<ChatMessage>& getHistory() const { return _history; }
+    void addHistory(const String& role, const String& text);
 
     // Отправка текстового запроса (промпта) к Gemini (с авто-повтором при сбоях и обработкой аппаратных действий)
     GeminiResponse ask(const String& prompt);
@@ -80,4 +97,5 @@ private:
     UsageTracker* _usageTracker;
     HardwareController* _hwController;
     std::vector<String> _cachedModels;
+    std::vector<ChatMessage> _history;
 };

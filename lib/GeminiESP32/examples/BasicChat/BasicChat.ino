@@ -119,6 +119,9 @@ void setup() {
     Serial.printf("\n📈 Запросов использовано сегодня: %u / %u\n",
                   ai.getUsage().getStats().requestsToday,
                   ai.getUsage().getStats().dailyRequestLimit);
+
+    Serial.println("\n✅ Чат запущен! Вы можете общаться с ИИ в диалоговом режиме (он помнит контекст).");
+    Serial.println("Введите /clear чтобы стереть память диалога.");
 }
 
 void loop() {
@@ -129,6 +132,12 @@ void loop() {
         userInput.trim(); // Удаляем лишние пробелы и перенос строки
         
         if (userInput.length() == 0) return;
+        
+        if (userInput.equalsIgnoreCase("/clear")) {
+            ai.clearHistory();
+            Serial.println("\n[Система]: История диалога очищена.\n");
+            return;
+        }
         
         Serial.printf("\n[Вы]: %s\n", userInput.c_str());
         Serial.print("[ИИ]: ");

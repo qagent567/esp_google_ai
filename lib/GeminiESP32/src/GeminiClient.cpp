@@ -53,6 +53,16 @@ void GeminiClient::saveCachedModels() {
     }
 }
 
+void GeminiClient::addHistory(const String& role, const String& text) {
+    _history.push_back({role, text});
+    while (_history.size() > GEMINI_HISTORY_LIMIT) {
+        _history.erase(_history.begin());
+        if (!_history.empty() && _history.front().role == "model") {
+            _history.erase(_history.begin());
+        }
+    }
+}
+
 String GeminiClient::buildApiUrl() const {
     const AppConfig& cfg = _configMgr.getConfig();
     String cleanModel = cfg.model; cleanModel.trim();
@@ -68,13 +78,18 @@ String GeminiClient::buildRequestBody(const String& prompt) const {
     const AppConfig& cfg = _configMgr.getConfig();
     JsonDocument doc;
 
-    // Массив contents (сообщение пользователя)
+    // Массив contents (история + текущее сообщение)
     JsonArray contents = doc["contents"].to<JsonArray>();
+
+    for (const auto& msg : _history) {
+        JsonObject item = contents.add<JsonObject>();
+        item["role"] = msg.role;
+        item["parts"].to<JsonArray>().add<JsonObject>()["text"] = msg.text;
+    }
+
     JsonObject userMsg = contents.add<JsonObject>();
     userMsg["role"] = "user";
-    JsonArray parts = userMsg["parts"].to<JsonArray>();
-    JsonObject textPart = parts.add<JsonObject>();
-    textPart["text"] = prompt;
+    userMsg["parts"].to<JsonArray>().add<JsonObject>()["text"] = prompt;
 
     // Системный промпт + инструкции аппаратного управления ESP32
     String effectiveSysPrompt = cfg.systemPrompt;
@@ -264,6 +279,12 @@ GeminiResponse GeminiClient::ask(const String& prompt) {
             if (httpResponseCode == 200) {
                 parseResponse(payload, result);
                 http.end();
+                
+                if (result.success) {
+                    addHistory("user", prompt);
+                    addHistory("model", result.text); // Сохраняем чистый ответ нейросети (до отчета ESP32)
+                }
+
                 processHardwareActions(result);
                 return result;
             } else if ((httpResponseCode == 500 || httpResponseCode == 503) && attempt < maxAttempts) {

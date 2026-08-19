@@ -85,6 +85,10 @@ void GeminiESP32::allowAllSafePins() {
     _hardware.allowAllSafePins();
 }
 
+void GeminiESP32::clearHistory() {
+    if (_client) _client->clearHistory();
+}
+
 String GeminiESP32::ask(const String& prompt) {
     if (!_client) return "Клиент Gemini не инициализирован";
     GeminiResponse resp = _client->ask(prompt);
