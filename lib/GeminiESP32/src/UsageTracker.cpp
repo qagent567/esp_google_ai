@@ -121,6 +121,9 @@ void UsageTracker::loadFromNvs() {
         _stats.responseTokensToday = p.getUInt("r_tok_today", 0);
         _stats.totalTokensToday = p.getUInt("t_tok_today", 0);
         _stats.dailyRequestLimit = p.getUInt("d_limit", 500);
+        if (_stats.dailyRequestLimit == 1500) {
+            _stats.dailyRequestLimit = 500;
+        }
         _stats.minuteLimit = p.getUInt("m_limit", 15);
         _stats.currentDayOfYear = p.getInt("day_of_year", -1);
         p.end();

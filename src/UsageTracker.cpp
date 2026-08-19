@@ -39,6 +39,9 @@ void UsageTracker::syncNTP(int gmtOffsetHours) {
 void UsageTracker::load() {
     if (_prefs.begin("ai_usage", true)) {
         _stats.dailyRequestLimit = _prefs.getUInt("limit", DEFAULT_DAILY_LIMIT);
+        if (_stats.dailyRequestLimit == 1500) {
+            _stats.dailyRequestLimit = DEFAULT_DAILY_LIMIT; // Миграция со старого значения 1500 -> 500
+        }
         _stats.requestsToday = _prefs.getUInt("req_day", 0);
         _stats.promptTokensToday = _prefs.getUInt("tok_in", 0);
         _stats.responseTokensToday = _prefs.getUInt("tok_out", 0);

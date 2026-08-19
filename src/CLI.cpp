@@ -453,7 +453,9 @@ void SerialCLI::registerCommands() {
         }
         _configMgr.setModel(targetModel);
         _configMgr.save();
-        Serial.printf("[ОК] Активная модель Gemini установлена: '%s'\n", targetModel.c_str());
+        uint32_t lim = GeminiClient::getModelDailyLimit(targetModel);
+        _usageTracker.setDailyLimit(lim);
+        Serial.printf("[ОК] Активная модель Gemini установлена: '%s' (Суточный лимит: %u RPD)\n", targetModel.c_str(), lim);
     };
 
     addCommand("config", "Показать текущую конфигурацию и подсказки по настройке", "Конфигурация", [this](int argc, String argv[]) { printStatus(); });
