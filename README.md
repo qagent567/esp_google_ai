@@ -3,7 +3,7 @@
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Supported-orange.svg)](https://platformio.org/)
 [![Arduino](https://img.shields.io/badge/Arduino-Library-blue.svg)](https://www.arduino.cc/)
 [![ESP32](https://img.shields.io/badge/MCU-ESP32%20%7C%20S3%20%7C%20CAM-red.svg)](https://espressif.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-CC_BY--NC_4.0-yellow.svg)](LICENSE)
 
 Универсальный Open-Source проект для интеграции искусственного интеллекта **Google Gemini** в микроконтроллеры **ESP32** с поддержкой Smart DNS (работа без VPN), управления периферией (GPIO/ADC/I2C), нативного Function Calling, компьютерного зрения (ESP32-CAM) и встроенного Web Dashboard.
 
@@ -119,5 +119,8 @@ Google AI Studio блокирует прямые запросы с россий�
 
 ## 📄 Лицензия
 
-Проект распространяется под открытой лицензией **MIT License**. Свободно для личного и коммерческого использования.
+Проект распространяется под некоммерческой лицензией **Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)**.  
+✅ **Разрешено:** Свободное использование в личных, образовательных, научных и хобби-проектах, модификация и распространение с указанием авторства.  
+🚫 **Запрещено:** Коммерческое использование, прямая продажа, перепродажа прошивки/библиотеки или включение в платные коммерческие продукты без предварительного письменного разрешения автора (**qagent567**).
+
 Автор: **qagent567** (2026).

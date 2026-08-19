@@ -3,7 +3,7 @@
 [![PlatformIO Registry](https://img.shields.io/badge/PlatformIO-GeminiESP32-orange.svg)](https://platformio.org/)
 [![Arduino Library](https://img.shields.io/badge/Arduino-Library-blue.svg)](https://www.arduino.cc/)
 [![Target MCU](https://img.shields.io/badge/MCU-ESP32-red.svg)](https://espressif.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-CC_BY--NC_4.0-yellow.svg)](LICENSE)
 
 **GeminiESP32** — автономная C++ библиотека для интеграции Google Gemini AI в проекты на **ESP32**. Разработана с упором на минимальный расход памяти, полную изоляцию от другой периферии и простое встраивание в готовые прошивки.
 
@@ -625,5 +625,8 @@ build_flags =
 
 ## 📄 Лицензия
 
-MIT License — свободное использование, модификация и распространение.
+Библиотека распространяется под некоммерческой лицензией **Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)**.  
+✅ **Разрешено:** Свободное использование в личных, хобби, научных и образовательных проектах.  
+🚫 **Запрещено:** Коммерческая продажа, перепродажа или включение в платные коммерческие продукты без письменного разрешения автора (**qagent567**).
+
 Разработано для IoT и embedded-сообщества.

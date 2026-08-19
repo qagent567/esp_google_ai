@@ -33,6 +33,9 @@
 #### Зависимости
 - [ArduinoJson](https://arduinojson.org/) >= 7.0.0
 
+#### Лицензия
+- Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0) — только для некоммерческого использования.
+
 ---
 
 ## Планируется в следующих релизах
