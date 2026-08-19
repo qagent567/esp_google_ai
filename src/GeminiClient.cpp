@@ -225,7 +225,8 @@ void GeminiClient::processHardwareActions(GeminiResponse& response) {
 String GeminiClient::getHttpErrorDescription(int httpCode) {
     switch (httpCode) {
         case 200: return "OK (Успешно)";
-        case 400: return "Неверный запрос (Bad Request) - недействительный API-ключ или некорректный формат";
+        case 400: return "Неверный запрос (Bad Request) - проверьте формат или параметры";
+        case 401: return "Не авторизован (Unauthorized) - недействительный, удаленный или некорректный API-ключ Gemini";
         case 403: return "Доступ запрещен (Forbidden) - блокировка региона или ограничения ключа (проверьте Smart DNS)";
         case 404: return "Не найдено (Not Found) - проверьте имя модели Gemini";
         case 429: return "Превышен лимит запросов (Rate Limit Exceeded) - подождите перед следующим запросом";
@@ -559,8 +560,23 @@ bool GeminiClient::listAvailableModels() {
         http.end();
         return true;
     } else {
+        String payload = http.getString();
         Serial.printf("[ОШИБКА] Не удалось получить список моделей. Код HTTP: %d (%s)\n", 
                       httpCode, getHttpErrorDescription(httpCode).c_str());
+        if (!payload.isEmpty()) {
+            JsonDocument errDoc;
+            if (deserializeJson(errDoc, payload) == DeserializationError::Ok && errDoc["error"]["message"]) {
+                Serial.printf(" [Ответ Google]: %s\n", errDoc["error"]["message"].as<const char*>());
+            } else {
+                Serial.printf(" [Ответ сервера]: %.150s\n", payload.c_str());
+            }
+        }
+        if (httpCode == 401 || httpCode == 400) {
+            Serial.println(F("\nПодсказка: Проверьте правильность вашего API-ключа (начинается с AIzaSy...):"));
+            Serial.println(F(" 1. Получите ключ на https://aistudio.google.com/app/apikey"));
+            Serial.println(F(" 2. Установите его в терминале командой: set key ВАШ_КЛЮЧ"));
+            Serial.println(F(" 3. Проверьте сохраненный ключ командой: config\n"));
+        }
         http.end();
         return false;
     }

@@ -412,7 +412,8 @@ void GeminiClient::processHardwareActions(GeminiResponse& response) {
 String GeminiClient::getHttpErrorDescription(int httpCode) {
     switch (httpCode) {
         case 200: return "OK (Успешно)";
-        case 400: return "Неверный запрос (Bad Request) - недействительный API-ключ или некорректный формат";
+        case 400: return "Неверный запрос (Bad Request) - проверьте формат или параметры";
+        case 401: return "Не авторизован (Unauthorized) - недействительный, удаленный или некорректный API-ключ Gemini";
         case 403: return "Доступ запрещен (Forbidden) - блокировка региона или ограничения ключа (проверьте Smart DNS)";
         case 404: return "Не найдено (Not Found) - проверьте имя модели Gemini";
         case 429: return "Превышен лимит запросов (Rate Limit Exceeded) - подождите перед следующим запросом";
