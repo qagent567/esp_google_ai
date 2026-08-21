@@ -25,13 +25,18 @@ static const char GOOGLE_ROOT_CA[] PROGMEM =
 "4c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6r7s8t9u0v1w2x3y4z5a6b7c8d9e0f1g2h\n"
 "-----END CERTIFICATE-----\n";
 
-static void configureTls(WiFiClientSecure& client) {
+void GeminiClient::ensureTlsConfigured() {
+    if (!_isTlsConfigured) {
 #if GEMINI_VERIFY_SSL
-    client.setCACert(GOOGLE_ROOT_CA);
+        _secureClient.setCACert(GOOGLE_ROOT_CA);
 #else
-    client.setInsecure();
+        _secureClient.setInsecure();
 #endif
-    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
+        _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
+        // Optimize TCP for latency
+        _secureClient.setNoDelay(true);
+        _isTlsConfigured = true;
+    }
 }
 
 GeminiClient::GeminiClient(ConfigManager& configMgr, 
@@ -312,6 +317,35 @@ String GeminiClient::buildRequestBodyWithImage(const String& prompt,
 }
 #endif
 
+bool GeminiClient::parseResponse(Stream& stream, GeminiResponse& response) {
+    JsonDocument doc;
+    
+    JsonDocument filter;
+    filter["error"]["message"] = true;
+    filter["error"]["code"] = true;
+    filter["candidates"][0]["content"]["parts"][0]["text"] = true;
+#if GEMINI_ENABLE_FUNCTION_CALLING
+    filter["candidates"][0]["content"]["parts"][0]["functionCall"]["name"] = true;
+    filter["candidates"][0]["content"]["parts"][0]["functionCall"]["args"] = true;
+#endif
+    filter["candidates"][0]["finishReason"] = true;
+    filter["usageMetadata"]["promptTokenCount"] = true;
+    filter["usageMetadata"]["candidatesTokenCount"] = true;
+    filter["usageMetadata"]["totalTokenCount"] = true;
+
+    DeserializationError error = deserializeJson(doc, stream, DeserializationOption::Filter(filter));
+
+    if (error) {
+        response.success = false;
+        char errBuf[128];
+        snprintf(errBuf, sizeof(errBuf), "Ошибка парсинга JSON потока: %s", error.c_str());
+        response.text = String(errBuf);
+        return false;
+    }
+
+    return parseResponse(doc, response);
+}
+
 bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& response) {
     if (jsonPayload.isEmpty()) {
         response.success = false;
@@ -330,6 +364,10 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
         return false;
     }
 
+    return parseResponse(doc, response);
+}
+
+bool GeminiClient::parseResponse(const JsonDocument& doc, GeminiResponse& response) {
     // Проверка на ошибку API от Google
     if (doc["error"]) {
         response.success = false;
@@ -343,15 +381,15 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
 
     // Извлечение candidates
     if (doc["candidates"] && doc["candidates"].is<JsonArray>() && doc["candidates"].size() > 0) {
-        JsonObject cand = doc["candidates"][0];
+        JsonObjectConst cand = doc["candidates"][0];
         
         if (cand["content"] && cand["content"]["parts"] && cand["content"]["parts"].is<JsonArray>() && cand["content"]["parts"].size() > 0) {
-            JsonArray parts = cand["content"]["parts"].as<JsonArray>();
-            for (JsonObject part : parts) {
+            JsonArrayConst parts = cand["content"]["parts"].as<JsonArrayConst>();
+            for (JsonObjectConst part : parts) {
 #if GEMINI_ENABLE_FUNCTION_CALLING
                 // 1. Проверка на Function Call от Google API
                 if (part["functionCall"]) {
-                    JsonObject fc = part["functionCall"];
+                    JsonObjectConst fc = part["functionCall"];
                     const char* fnName = fc["name"];
                     if (fnName) {
                         response.hasFunctionCall = true;
@@ -396,9 +434,7 @@ bool GeminiClient::parseResponse(const String& jsonPayload, GeminiResponse& resp
     }
 
     response.success = false;
-    char noTxtBuf[300];
-    snprintf(noTxtBuf, sizeof(noTxtBuf), "Не удалось извлечь текст ответа. Ответ: %.200s", jsonPayload.c_str());
-    response.text = String(noTxtBuf);
+    response.text = "Не удалось извлечь текст ответа из JSON (возможно, пустой ответ или нестандартный формат).";
     return false;
 }
 
@@ -490,11 +526,12 @@ GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
 
     const int maxAttempts = 2;
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-        WiFiClientSecure client;
-        configureTls(client);
+        ensureTlsConfigured();
 
         HTTPClient http;
-        if (!http.begin(client, url)) {
+        http.setReuse(true); // Включаем HTTP Keep-Alive
+
+        if (!http.begin(_secureClient, url)) {
             result.text = "Ошибка: Не удалось инициализировать HTTPS соединение.";
             result.durationMs = millis() - startTime;
             return result;
@@ -509,9 +546,14 @@ GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
         result.durationMs = millis() - startTime;
 
         if (httpResponseCode > 0) {
-            String payload = http.getString();
             if (httpResponseCode == 200) {
-                parseResponse(payload, result);
+                // Успешный запрос - парсим напрямую из потока, экономя RAM!
+                WiFiClient* stream = http.getStreamPtr();
+                if (stream) {
+                    parseResponse(*stream, result);
+                } else {
+                    result.text = "Ошибка: не удалось получить поток данных.";
+                }
                 http.end();
                 return result;
             } else if ((httpResponseCode == 500 || httpResponseCode == 503) && attempt < maxAttempts) {
@@ -519,6 +561,8 @@ GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
                 delay(1000);
                 continue;
             } else {
+                // Ошибка API (400, 401, 403, 429) - читаем как строку для отладки
+                String payload = http.getString();
                 parseResponse(payload, result);
                 if (result.text.isEmpty() || result.text.startsWith("Не удалось извлечь")) {
                     char errHdr[128];
@@ -535,6 +579,8 @@ GeminiResponse GeminiClient::sendRawRequest(const String& requestBody) {
         } else {
             if (attempt < maxAttempts) {
                 http.end();
+                // Если произошла ошибка соединения, возможно нужно переподключиться
+                _secureClient.stop();
                 delay(1000);
                 continue;
             }
@@ -655,12 +701,13 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
     String url = buildApiUrl();
     String requestBody = buildRequestBodyWithImage(prompt, imageData, imageSize, mimeType);
 
-    WiFiClientSecure client;
-    configureTls(client);
-    client.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000 + 5);
+    ensureTlsConfigured();
+    // Vision requests might need slightly more timeout for image upload and processing
+    _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000 + 5);
 
     HTTPClient http;
-    if (!http.begin(client, url)) {
+    http.setReuse(true);
+    if (!http.begin(_secureClient, url)) {
         result.text = "Ошибка: Не удалось инициализировать HTTPS соединение.";
         result.durationMs = millis() - startTime;
         return result;
@@ -675,8 +722,12 @@ GeminiResponse GeminiClient::askWithImage(const String& prompt,
     result.durationMs = millis() - startTime;
 
     if (httpResponseCode == 200) {
-        String payload = http.getString();
-        parseResponse(payload, result);
+        WiFiClient* stream = http.getStreamPtr();
+        if (stream) {
+            parseResponse(*stream, result);
+        } else {
+            result.text = "Ошибка: не удалось получить поток данных.";
+        }
         http.end();
 
 #if GEMINI_ENABLE_USAGE_TRACKER
@@ -728,11 +779,11 @@ GeminiResponse GeminiClient::streamAsk(const String& prompt, GeminiStreamCallbac
     String url = buildStreamApiUrl();
     String requestBody = buildRequestBody(prompt);
 
-    WiFiClientSecure client;
-    configureTls(client);
+    ensureTlsConfigured();
 
     HTTPClient http;
-    if (!http.begin(client, url)) {
+    http.setReuse(true);
+    if (!http.begin(_secureClient, url)) {
         result.text = "Ошибка: Не удалось инициализировать HTTPS соединение.";
         result.durationMs = millis() - startTime;
         return result;
@@ -827,12 +878,13 @@ bool GeminiClient::listAvailableModels() {
     }
 
     String url = String(GEMINI_API_HOST) + "?key=" + cfg.apiKey;
-    WiFiClientSecure client;
-    configureTls(client);
-    client.setTimeout(30);
+    ensureTlsConfigured();
+    // Temporarily increase timeout for model listing which takes longer
+    _secureClient.setTimeout(30);
 
     HTTPClient http;
-    if (!http.begin(client, url)) {
+    http.setReuse(true);
+    if (!http.begin(_secureClient, url)) {
         Serial.println("Ошибка: Не удалось инициализировать HTTPS соединение.");
         return false;
     }
@@ -881,14 +933,20 @@ bool GeminiClient::listAvailableModels() {
             }
 
             saveCachedModels();
+            // Restore default timeout
+            _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
             return true;
         }
     } else {
         Serial.printf("Ошибка запроса моделей (HTTP %d): %s\n", httpResponseCode, getHttpErrorDescription(httpResponseCode).c_str());
         http.end();
+        // Restore default timeout
+        _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
         return false;
     }
 
+    // Restore default timeout
+    _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
     return false;
 }
 
@@ -898,14 +956,17 @@ bool GeminiClient::testConnection() {
         return false;
     }
 
-    WiFiClientSecure client;
-    configureTls(client);
-    client.setTimeout(10);
+    ensureTlsConfigured();
+    _secureClient.setTimeout(10);
 
-    if (!client.connect("generativelanguage.googleapis.com", 443)) {
+    if (!_secureClient.connect("generativelanguage.googleapis.com", 443)) {
+        // Restore default timeout
+        _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
         return false;
     }
 
-    client.stop();
+    _secureClient.stop();
+    // Restore default timeout
+    _secureClient.setTimeout(GEMINI_HTTP_TIMEOUT_MS / 1000);
     return true;
 }

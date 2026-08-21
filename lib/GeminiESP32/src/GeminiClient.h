@@ -231,9 +231,19 @@ public:
 #endif
 
     /**
-     * @brief Парсинг JSON ответа от Google API
+     * @brief Парсинг JSON ответа от Google API из потока (Stream)
+     */
+    bool parseResponse(Stream& stream, GeminiResponse& response);
+
+    /**
+     * @brief Парсинг JSON ответа от Google API (из строки)
      */
     bool parseResponse(const String& jsonPayload, GeminiResponse& response);
+
+    /**
+     * @brief Внутренняя реализация парсинга уже разобранного JSON-документа
+     */
+    bool parseResponse(const JsonDocument& doc, GeminiResponse& response);
 
     /**
      * @brief Извлечение и исполнение аппаратного действия из ответа ИИ
@@ -273,4 +283,9 @@ private:
 #if GEMINI_ENABLE_NVS_HISTORY
     bool _persistentHistory;
 #endif
+    
+    // Persistent TLS client for HTTP Keep-Alive
+    WiFiClientSecure _secureClient;
+    bool _isTlsConfigured = false;
+    void ensureTlsConfigured();
 };
