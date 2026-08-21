@@ -1,6 +1,6 @@
 {
   "name": "GeminiESP32",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Легковесная и мощная библиотека для подключения Google Gemini AI к ESP32: Vision (ESP32-CAM), нативный Function Calling, Web Dashboard, SSE стриминг, FreeRTOS асинхронность, управление GPIO/ADC/I2C и Smart DNS.",
   "keywords": "gemini, google-ai, esp32, esp32-cam, ai, llm, iot, gpio, hardware-control, function-calling, streaming, web-dashboard",
   "homepage": "https://github.com/qagent567/esp_google_ai",
